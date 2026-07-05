@@ -1,6 +1,8 @@
-//
-// Created by Administrator on 2025/12/7.
-//
+/**
+ * @file UartProto.c
+ * @brief UART receive and telemetry protocol implementation.
+ * @brief 串口接收与遥测协议实现。
+ */
 
 #include "UartProto.h"
 
@@ -11,15 +13,18 @@ void UartProto_init(UartProto* Proto,UART_HandleTypeDef *huart,Param* params)
 {
     Proto->huart=huart;
     Proto->param=params;
+    Proto->tx_busy=false;
     HAL_UARTEx_ReceiveToIdle_DMA(Proto->huart,Proto->param->RxBuf,sizeof(Proto->param->RxBuf));
     __HAL_DMA_DISABLE_IT(&hdma_usart2_rx,DMA_IT_HT);
-    Proto->param->ReturnEn=true;//接收返回关闭
+    Proto->param->ReturnEn=true;
 }
 
 void UartProto_RxEventCallback(UartProto* Proto, const UART_HandleTypeDef *huart,uint16_t Size)
 {
     if (huart == Proto->huart)
     {
+        /* Restart receive-to-idle DMA before optional echo. */
+        /* 先重新启动空闲接收 DMA，再根据配置回显数据。 */
         HAL_UARTEx_ReceiveToIdle_DMA(Proto->huart, Proto->param->RxBuf, sizeof(Proto->param->RxBuf));
         if (Proto->param->ReturnEn)
         {
@@ -31,43 +36,75 @@ void UartProto_RxEventCallback(UartProto* Proto, const UART_HandleTypeDef *huart
 
 void UartProto_DMATxData(const UartProto* Proto, const uint8_t* TxData,uint16_t Size)
 {
-    //HAL_UART_Transmit_DMA(Proto->huart, TxData, Size);
+    /* RX echo stays blocking to avoid sharing the telemetry DMA buffer. */
+    /* 接收回显仍使用阻塞发送，避免和遥测 DMA 缓冲区冲突。 */
     HAL_UART_Transmit(Proto->huart, TxData, Size,10);
 }
 
-void UartProto_SendLongInt32(const UartProto* Proto,int32_t* data,int8_t size)
+void UartProto_SendUint8(const UartProto* Proto, uint8_t data)
 {
-    static char buf[64];   // 最大: "65535\r\n" => 7字节 + 结尾安全空间
+    UartProto_DMATxData(Proto, &data, sizeof(data));
+}
+
+void UartProto_SendInt16(const UartProto* Proto, int16_t data)
+{
+    uint8_t bytes[2];
+
+    bytes[0] = (uint8_t)(data & 0xFF);
+    bytes[1] = (uint8_t)(((uint16_t)data >> 8) & 0xFF);
+    UartProto_DMATxData(Proto, bytes, sizeof(bytes));
+}
+
+void UartProto_SendLongInt32(const UartProto* Proto,const int32_t* data,int8_t size)
+{
+    static char buf[64];
     uint16_t len = 0;
 
+    if (Proto->tx_busy || size <= 0)
+    {
+        return;
+    }
 
     for (uint8_t i = 0; i < size; i++)
     {
-        if (data[i] < 0)
+        int32_t value = data[i];
+        uint32_t magnitude;
+
+        /* Convert manually to avoid pulling in printf on a small MCU. */
+        /* 手动转换整数，避免在小容量 MCU 上引入 printf。 */
+        if (value < 0)
         {
             buf[len++] = '-';
-            data[i] = abs(data[i]);
+            magnitude = (uint32_t)(-(value + 1)) + 1U;
         }
-        if (data[i] >= 1000000000) buf[len++] = 0x30+ data[i] / 10000000;
-        if (data[i] >= 100000000)  buf[len++] = 0x30+ (data[i]/ 100000000) % 10;
-        if (data[i] >= 10000000)  buf[len++] = 0x30+ (data[i]/ 10000000) % 10;
-        if (data[i] >= 1000000)  buf[len++] = 0x30+ (data[i]/ 1000000) % 10;
-        if (data[i] >= 100000)  buf[len++] = 0x30+ (data[i]/ 100000) % 10;
-        if (data[i] >= 10000)  buf[len++] = 0x30+ (data[i]/ 10000) % 10;
-        if (data[i] >= 1000)  buf[len++] = 0x30+ (data[i]/ 1000) % 10;
-        if (data[i] >= 100)   buf[len++] = 0x30+ (data[i]/ 100) % 10;
-        if (data[i] >= 10)    buf[len++] = 0x30+ (data[i] / 10) % 10;
-        buf[len++] = 0x30 + (data[i] % 10);
+        else
+        {
+            magnitude = (uint32_t)value;
+        }
+
+        uint32_t divisor = 1000000000U;
+        while (divisor > 1U && magnitude < divisor)
+        {
+            divisor /= 10U;
+        }
+        while (divisor > 0U)
+        {
+            buf[len++] = (char)('0' + magnitude / divisor);
+            magnitude %= divisor;
+            divisor /= 10U;
+        }
 
         if (size>1 && i< size-1)
         {
             buf[len++] = ',';
         }
-
     }
 
-    //buf[len++] = '\r';
     buf[len++] = '\n';
 
-    UartProto_DMATxData(Proto, (uint8_t*)buf, len);
+    ((UartProto*)Proto)->tx_busy = true;
+    if (HAL_UART_Transmit_DMA(Proto->huart, (uint8_t*)buf, len) != HAL_OK)
+    {
+        ((UartProto*)Proto)->tx_busy = false;
+    }
 }

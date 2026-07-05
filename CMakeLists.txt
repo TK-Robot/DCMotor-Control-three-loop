@@ -48,6 +48,10 @@ add_executable(${CMAKE_PROJECT_NAME}
         Libraries/Filter/Filter.h
         Libraries/PWMCapture/PWMCapture.c
         Libraries/PWMCapture/PWMCapture.h
+        Libraries/NvmParam/NvmParam.c
+        Libraries/NvmParam/NvmParam.h
+        Libraries/ServoControl/ServoControl.c
+        Libraries/ServoControl/ServoControl.h
 )
 
 # Add STM32CubeMX generated sources
@@ -74,6 +78,8 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         Libraries/PID
         Libraries/Filter
         Libraries/PWMCapture
+        Libraries/NvmParam
+        Libraries/ServoControl
 )
 
 # Add project symbols (macros)
