@@ -12,17 +12,9 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
-#编译等级
-#常见的优化等级
-# Release: 添加 -O3 -DNDEBUG 标志，主要用于发布版本，最大化代码的运行速度。
-# Debug: 添加 -g 标志，主要用于调试版本，包含调试信息。
-# MinSizeRel: 添加 -Os -DNDEBUG 标志，主要用于最小化代码大小。
-# RelWithDebInfo: 添加 -O2 -g -DNDEBUG 标志，既包含优化也包含调试信息。
-set(CMAKE_BUILD_TYPE RelWithDebInfo)
-
 # Define the build type
 if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE "Debug")
+    set(CMAKE_BUILD_TYPE "RelWithDebInfo")
 endif()
 
 # Set the project name
@@ -49,7 +41,7 @@ add_executable(${CMAKE_PROJECT_NAME}
         Libraries/VoltageStatus/VoltageStatus.c
         Libraries/VoltageStatus/VoltageStatus.h
         Libraries/TypeDefine.h
-        Libraries/PID/pid.h
+        Libraries/PID/PID.h
         Libraries/PID/PID.c
         Libraries/PID/PID.h
         Libraries/Filter/Filter.c
@@ -81,7 +73,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         Libraries
         Libraries/PID
         Libraries/Filter
-        Libraries/Filter/PWMCapture
+        Libraries/PWMCapture
 )
 
 # Add project symbols (macros)
@@ -98,7 +90,9 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
 )
 
-#Uncomment for hardware floating point
-add_compile_definitions(ARM_MATH_CM4;ARM_MATH_MATRIX_CHECK;ARM_MATH_ROUNDING)
-add_compile_options(-mfloat-abi=hard -mfpu=fpv4-sp-d16)
-add_link_options(-mfloat-abi=hard -mfpu=fpv4-sp-d16)
+# STM32G030 uses a Cortex-M0+ core without hardware FPU.
+target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
+    ARM_MATH_CM0PLUS
+    ARM_MATH_MATRIX_CHECK
+    ARM_MATH_ROUNDING
+)

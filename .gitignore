@@ -1,0 +1,39 @@
+# Build outputs
+build/
+cmake-build-*/
+out/
+
+# CMake and Ninja generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+build.ninja
+.ninja_deps
+.ninja_log
+
+# Firmware artifacts
+*.elf
+*.hex
+*.bin
+*.map
+*.list
+*.lst
+*.d
+*.o
+*.obj
+*.a
+
+# IDE and editor local state
+.vscode/
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/usage.statistics.xml
+.idea/dictionaries/
+*.user
+*.suo
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
