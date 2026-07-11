@@ -17,29 +17,45 @@
 /* USER CODE BEGIN Includes */
 #include "TypeDefine.h"
 #include "MT6701.h"
-#include "UartProto.h"
 #include "AD116.h"
 #include "VoltageStatus.h"
 #include "PID.h"
 #include "PWMCapture/PWMCapture.h"
 #include "NvmParam.h"
 #include "ServoControl.h"
+#include "Tsbp.h"
 /* USER CODE END Includes */
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
 Param Param_KX;
-UartProto U2Comm;
 MT6701 Encoder;
 AD116 Drive;
 VoltageStatus Voltage;
 CaptureData PWMCaptureData;
 ServoControl Servo;
+TsbpContext Tsbp;
 /* USER CODE END PV */
 
 void SystemClock_Config(void);
 
 /* USER CODE BEGIN 0 */
+#define TK_UART_LINK_TEST 0
+
+#if TK_UART_LINK_TEST
+static void App_UartLinkTest_1ms(void)
+{
+  static uint16_t tick_ms = 0;
+  static const uint8_t test_frame[] = {'T', 'K', '1', '1', '5', '2', '0', '0', '\r', '\n'};
+
+  if (++tick_ms >= 1000U)
+  {
+    tick_ms = 0;
+    (void)HAL_UART_Transmit(&huart2, (uint8_t *)test_frame, sizeof(test_frame), 10U);
+  }
+}
+#endif
+
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
   Param_KX.DutyRatio = PWMCapture_Calculate(&PWMCaptureData, htim);
@@ -47,14 +63,14 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-  UartProto_RxEventCallback(&U2Comm, huart, Size);
+  Tsbp_RxEventCallback(&Tsbp, huart, Size);
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart == &huart2)
   {
-    U2Comm.tx_busy = false;
+    Tsbp_TxCpltCallback(&Tsbp, huart);
   }
 }
 
@@ -66,7 +82,7 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     if ((err & HAL_UART_ERROR_DMA) != 0U)
     {
       HAL_UART_AbortTransmit(huart);
-      U2Comm.tx_busy = false;
+      Tsbp_TxCpltCallback(&Tsbp, huart);
     }
   }
 }
@@ -85,19 +101,26 @@ static void App_DefaultParam(Param *param)
   param->PowerSaveVoltage_mV = 4000;
   param->DriveRunMode = 0;
   param->DrivePower = 0;
+  param->BaudRate = 115200UL;
+  param->SerialWatchdogMs = 100U;
+  param->PdoMissLimit = 3U;
+  param->FailSafePolicy = FAILSAFE_DISABLE_OUTPUT;
+  param->ControlSource = CONTROL_SOURCE_PWM_INPUT;
+  param->NodeId = 1U;
+  param->Topology = TSBP_TOPOLOGY_PARALLEL_BUS;
+  param->NodeCount = 1U;
+  param->NodePosition = 1U;
+  param->ReplySlotUs = 120U;
+  param->FaultCode = 0U;
 }
 
-static void App_SendTelemetry(void)
+static void App_ApplyUartBaud(uint32_t baud)
 {
-  int32_t buf[6];
-
-  buf[0] = (int32_t)Servo.command.mode;
-  buf[1] = Param_KX.EncoderSpeed;
-  buf[2] = Param_KX.EncoderMultiTurnValue;
-  buf[3] = Param_KX.INA181_mA;
-  buf[4] = Param_KX.DrivePower;
-  buf[5] = Param_KX.VCC_mV;
-  UartProto_SendLongInt32(&U2Comm, buf, 6);
+  if (baud == 115200UL || baud == 500000UL || baud == 1000000UL || baud == 2000000UL)
+  {
+    huart2.Init.BaudRate = baud;
+    (void)HAL_UART_Init(&huart2);
+  }
 }
 /* USER CODE END 0 */
 
@@ -121,8 +144,9 @@ int main(void)
   App_DefaultParam(&Param_KX);
   (void)NvmParam_Load(&Param_KX);
   Param_KX.CycleTimeMs = 1;
+  App_ApplyUartBaud(Param_KX.BaudRate);
 
-  UartProto_init(&U2Comm, &huart2, &Param_KX);
+  Tsbp_Init(&Tsbp, &huart2, &Param_KX);
   MT6701_init(&Encoder, &hi2c1, &Param_KX);
   AD116_init(&Drive, &htim3, TIM_CHANNEL_2, TIM_CHANNEL_3, &Param_KX);
   VoltageStatus_init(&Voltage, &hadc1, &Param_KX);
@@ -136,6 +160,8 @@ int main(void)
     CycleStart(&Drive, &htim14);
 
     ServoControl_Begin1ms(&Servo);
+    Tsbp_1msTick(&Tsbp);
+    ServoControl_SetCommand(&Servo, Tsbp_GetActiveCommand(&Tsbp));
     VoltageStatus_AnalyzeData(&Voltage);
 
     if (ServoControl_IsSpeedDue(&Servo))
@@ -147,15 +173,14 @@ int main(void)
     ServoControl_Run1ms(&Servo);
     AD116_Update(&Drive, &Param_KX);
 
-    if (ServoControl_ConsumeSaveRequest(&Servo))
+    if (ServoControl_ConsumeSaveRequest(&Servo) || Tsbp_ConsumeSaveRequest(&Tsbp))
     {
       (void)NvmParam_Save(&Param_KX);
     }
 
-    if (ServoControl_IsTelemetryDue(&Servo))
-    {
-      App_SendTelemetry();
-    }
+#if TK_UART_LINK_TEST
+    App_UartLinkTest_1ms();
+#endif
 
     CycleBlockingTimer(&Drive, &htim14);
     /* USER CODE END WHILE */

@@ -34,8 +34,6 @@ enable_language(C ASM)
 add_executable(${CMAKE_PROJECT_NAME}
         Libraries/MT6701/MT6701.c
         Libraries/MT6701/MT6701.h
-        Libraries/UartProto/UartProto.c
-        Libraries/UartProto/UartProto.h
         Libraries/AD116/AD116.c
         Libraries/AD116/AD116.h
         Libraries/VoltageStatus/VoltageStatus.c
@@ -52,6 +50,8 @@ add_executable(${CMAKE_PROJECT_NAME}
         Libraries/NvmParam/NvmParam.h
         Libraries/ServoControl/ServoControl.c
         Libraries/ServoControl/ServoControl.h
+        Libraries/Tsbp/Tsbp.c
+        Libraries/Tsbp/Tsbp.h
 )
 
 # Add STM32CubeMX generated sources
@@ -71,7 +71,6 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
         Libraries/MT6701
-        Libraries/UartProto
         Libraries/AD116
         Libraries/VoltageStatus
         Libraries
@@ -80,6 +79,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         Libraries/PWMCapture
         Libraries/NvmParam
         Libraries/ServoControl
+        Libraries/Tsbp
 )
 
 # Add project symbols (macros)

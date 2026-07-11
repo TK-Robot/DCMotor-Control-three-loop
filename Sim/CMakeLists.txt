@@ -27,3 +27,11 @@ target_include_directories(servo_tests PRIVATE
     ../Libraries/PID
     ../Libraries/ServoControl
 )
+
+add_executable(tsbp_bus_sim
+    tsbp_bus_sim.c
+)
+
+add_executable(tsbp_protocol_tests
+    tsbp_protocol_tests.c
+)

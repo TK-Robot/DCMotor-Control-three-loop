@@ -19,7 +19,7 @@
 #define NVM_PARAM_FLASH_ADDR         (FLASH_BASE + NVM_PARAM_FLASH_SIZE_BYTES - FLASH_PAGE_SIZE)
 #define NVM_PARAM_MAGIC              (0x56504B54UL)
 #define NVM_PARAM_COMMIT_MAGIC       (0x54494D43UL)
-#define NVM_PARAM_VERSION            (1U)
+#define NVM_PARAM_VERSION            (4U)
 #define NVM_PARAM_CRC_INIT           (0xFFFFFFFFUL)
 #define NVM_PARAM_CRC_POLY           (0xEDB88320UL)
 
@@ -141,6 +141,30 @@ static void NvmParam_CopyPidFromSave(PID_Int *dst, const PID_SaveParam *src)
     dst->prev_out = 0;
 }
 
+static bool NvmParam_IsSupportedBaud(uint32_t baud)
+{
+    return (baud == 115200UL) || (baud == 500000UL) ||
+           (baud == 1000000UL) || (baud == 2000000UL);
+}
+
+static uint8_t NvmParam_ClampNodeCount(uint8_t node_count)
+{
+    if (node_count < 1U || node_count > 4U)
+    {
+        return 1U;
+    }
+    return node_count;
+}
+
+static uint8_t NvmParam_ClampNodePosition(uint8_t node_position, uint8_t node_count)
+{
+    if (node_position < 1U || node_position > node_count)
+    {
+        return 1U;
+    }
+    return node_position;
+}
+
 static void NvmParam_FillSaveData(Param_SaveData *data, const Param *param)
 {
     memset(data, 0, sizeof(*data));
@@ -166,6 +190,15 @@ static void NvmParam_FillSaveData(Param_SaveData *data, const Param *param)
     data->DriveVeerFlag = param->DriveVeerFlag;
     data->ExpectMA = param->ExpectMA;
     data->PowerSaveVoltage_mV = param->PowerSaveVoltage_mV;
+    data->BaudRate = param->BaudRate;
+    data->SerialWatchdogMs = param->SerialWatchdogMs;
+    data->PdoMissLimit = param->PdoMissLimit;
+    data->FailSafePolicy = param->FailSafePolicy;
+    data->NodeId = param->NodeId;
+    data->Topology = param->Topology;
+    data->NodeCount = param->NodeCount;
+    data->NodePosition = param->NodePosition;
+    data->ReplySlotUs = param->ReplySlotUs;
 }
 
 static void NvmParam_ApplySaveData(Param *param, const Param_SaveData *data)
@@ -191,6 +224,18 @@ static void NvmParam_ApplySaveData(Param *param, const Param_SaveData *data)
     param->DriveVeerFlag = data->DriveVeerFlag;
     param->ExpectMA = data->ExpectMA;
     param->PowerSaveVoltage_mV = data->PowerSaveVoltage_mV;
+    param->BaudRate = NvmParam_IsSupportedBaud(data->BaudRate) ? data->BaudRate : 115200UL;
+    param->SerialWatchdogMs = (data->SerialWatchdogMs != 0U) ? data->SerialWatchdogMs : 100U;
+    param->PdoMissLimit = (data->PdoMissLimit != 0U) ? data->PdoMissLimit : 3U;
+    param->FailSafePolicy = (data->FailSafePolicy <= FAILSAFE_FALLBACK_PWM) ?
+                            data->FailSafePolicy : FAILSAFE_DISABLE_OUTPUT;
+    param->NodeId = (data->NodeId != 0U && data->NodeId < 0x7FU) ? data->NodeId : 1U;
+    param->Topology = (data->Topology <= TSBP_TOPOLOGY_RING_CHAIN) ?
+                      data->Topology : TSBP_TOPOLOGY_PARALLEL_BUS;
+    param->NodeCount = NvmParam_ClampNodeCount(data->NodeCount);
+    param->NodePosition = NvmParam_ClampNodePosition(data->NodePosition, param->NodeCount);
+    param->ReplySlotUs = (data->ReplySlotUs >= 50U && data->ReplySlotUs <= 1000U) ?
+                         data->ReplySlotUs : 120U;
 }
 
 static bool NvmParam_FindLatest(const NvmParamRecord **latest, uint32_t *next_slot)

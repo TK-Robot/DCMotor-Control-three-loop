@@ -1,5 +1,11 @@
 # DCMotor-Control-three-loop
 
+## TK Servo Bus 协议 / TK Servo Bus Protocol
+
+本项目的串口伺服总线协议文档已按模块拆分到 [docs/tsbp](docs/tsbp/README.md)，包含中英文双语说明、主站规则、两种拓扑、PDO/SDO、对象字典、故障重连、分布式时钟和 XML 类从站配置文件。
+
+The UART servo bus protocol documentation is split into modules under [docs/tsbp](docs/tsbp/README.md). It includes bilingual protocol rules, master requirements, two supported topologies, PDO/SDO, object dictionary, fault reconnect, distributed clock sync, and an XML-like slave description file.
+
 ## 项目简介 / Overview
 
 这是一个基于 STM32G030 的超小体积直流电机伺服控制项目，面向电流环、速度环和位置环的级联三环控制。项目包含 MT6701 磁编码器反馈、AD116 电机驱动 PWM 输出、INA181 电流采样、电源电压/温度监测、UART 遥测、PWM 输入捕获、掉电参数保存和 PC 端控制逻辑仿真。

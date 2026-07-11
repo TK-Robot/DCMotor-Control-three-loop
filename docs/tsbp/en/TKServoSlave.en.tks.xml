@@ -1,0 +1,217 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<TKServoSlave schemaVersion="1.0">
+  <Identity
+    vendor="TK-Robot"
+    product="DCMotor-Control-three-loop"
+    productCode="0x0001"
+    revision="0x00010000"
+    protocol="TSBP"
+    protocolVersion="0x01" />
+
+  <Description>Compact STM32G030-based DC motor cascaded-control servo slave.</Description>
+
+  <Communication
+    defaultBaud="1000000"
+    maxBaud="2000000"
+    uartFormat="8N1"
+    endian="little"
+    crc="crc16-ccitt-false"
+    topologies="parallel,ring-chain"
+    maxRxPdoItems="8"
+    maxTxPdoItems="8"
+    pdoFast="true"
+    pdoFastOverheadBytes="6"
+    pdoMappingCompile="true"
+    opObjectLookup="false"
+    recommendedNodeSlotBytes="24"
+    recommendedTotalFrameBytes="192" />
+
+  <StateMachine
+    states="BOOT,INIT,PREOP,SAFEOP,OP,FAULT"
+    defaultControlSource="pwm"
+    serialWatchdogMs="100"
+    reconnectPeriodMs="1000"
+    pdoMissLimit="3"
+    pdoCycleTimeUs="1000"
+    pdoJitterLimitUs="100"
+    pdoApplyCycleOffset="1"
+    defaultFailSafePolicy="disable" />
+
+  <DistributedClock
+    supported="true"
+    mode="software"
+    timeUnit="us" />
+
+  <ObjectDictionary>
+    <Group index="0x1000" name="Identity">
+      <Object index="0x1000" sub="0" name="DeviceType" type="u32" access="ro" />
+      <Object index="0x1001" sub="0" name="ProtocolVersion" type="u8" access="ro" default="0x01" />
+      <Object index="0x1002" sub="0" name="ProductCode" type="u16" access="ro" default="0x0001" />
+      <Object index="0x1003" sub="0" name="Revision" type="u32" access="ro" default="0x00010000" />
+      <Object index="0x1004" sub="1" name="UIDLow" type="u32" access="ro" />
+      <Object index="0x1004" sub="2" name="UIDMid" type="u32" access="ro" />
+      <Object index="0x1004" sub="3" name="UIDHigh" type="u32" access="ro" />
+    </Group>
+
+    <Group index="0x1100" name="Communication">
+      <Object index="0x1100" sub="0" name="NodeId" type="u8" access="rw" default="0xFF" save="false" />
+      <Object index="0x1101" sub="0" name="Topology" type="u8" access="rw" default="0" save="false" />
+      <Object index="0x1102" sub="0" name="BaudRate" type="u32" access="rw" default="1000000" save="true" />
+      <Object index="0x1103" sub="0" name="SerialWatchdogMs" type="u16" access="rw" default="100" save="true" />
+      <Object index="0x1104" sub="0" name="ReconnectPeriodMs" type="u16" access="rw" default="1000" save="true" />
+      <Object index="0x1105" sub="0" name="PdoMissLimit" type="u8" access="rw" default="3" save="true" />
+      <Object index="0x1106" sub="0" name="PdoCycleTimeUs" type="u32" access="rw-preop" default="1000" save="true" />
+      <Object index="0x1107" sub="0" name="PdoJitterLimitUs" type="u16" access="rw-preop" default="100" save="true" />
+      <Object index="0x1108" sub="0" name="PdoApplyCycleOffset" type="u8" access="rw-preop" default="1" save="true" />
+    </Group>
+
+    <Group index="0x1200" name="NetworkState">
+      <Object index="0x1200" sub="0" name="NetworkControl" type="u8" access="wo" />
+      <Object index="0x1201" sub="0" name="NetworkState" type="u8" access="ro" />
+      <Object index="0x1202" sub="0" name="LastError" type="u16" access="ro" />
+      <Object index="0x1203" sub="0" name="FaultReset" type="u8" access="wo" />
+    </Group>
+
+    <Group index="0x1300" name="DistributedClock">
+      <Object index="0x1300" sub="0" name="DcEnable" type="u8" access="rw" default="1" save="true" />
+      <Object index="0x1301" sub="0" name="LocalTimeUs" type="u32" access="ro" />
+      <Object index="0x1302" sub="0" name="MasterOffsetUs" type="i32" access="ro" />
+      <Object index="0x1303" sub="0" name="LastCycleId" type="u16" access="ro" />
+      <Object index="0x1304" sub="0" name="LastAppliedCycle" type="u16" access="ro" />
+      <Object index="0x1305" sub="0" name="PathDelayUs" type="u16" access="rw-preop" default="0" save="true" />
+    </Group>
+
+    <Group index="0x1600" name="RxPdoMapping">
+      <Object index="0x1600" sub="0" name="RxPdoItemCount" type="u8" access="rw-preop" default="5" save="true" />
+      <Object index="0x1600" sub="1" name="RxPdoMap1" type="u32" access="rw-preop" default="0x03002002" save="true" />
+      <Object index="0x1600" sub="2" name="RxPdoMap2" type="u32" access="rw-preop" default="0x01002001" save="true" />
+      <Object index="0x1600" sub="3" name="RxPdoMap3" type="u32" access="rw-preop" default="0x04002003" save="true" />
+      <Object index="0x1600" sub="4" name="RxPdoMap4" type="u32" access="rw-preop" default="0x06002004" save="true" />
+      <Object index="0x1600" sub="5" name="RxPdoMap5" type="u32" access="rw-preop" default="0x06002005" save="true" />
+      <Object index="0x1601" sub="0" name="RxPdoByteSize" type="u8" access="ro" default="13" />
+    </Group>
+
+    <Group index="0x1A00" name="TxPdoMapping">
+      <Object index="0x1A00" sub="0" name="TxPdoItemCount" type="u8" access="rw-preop" default="7" save="true" />
+      <Object index="0x1A00" sub="1" name="TxPdoMap1" type="u32" access="rw-preop" default="0x03002100" save="true" />
+      <Object index="0x1A00" sub="2" name="TxPdoMap2" type="u32" access="rw-preop" default="0x03002104" save="true" />
+      <Object index="0x1A00" sub="3" name="TxPdoMap3" type="u32" access="rw-preop" default="0x04002101" save="true" />
+      <Object index="0x1A00" sub="4" name="TxPdoMap4" type="u32" access="rw-preop" default="0x06002102" save="true" />
+      <Object index="0x1A00" sub="5" name="TxPdoMap5" type="u32" access="rw-preop" default="0x06002103" save="true" />
+      <Object index="0x1A00" sub="6" name="TxPdoMap6" type="u32" access="rw-preop" default="0x03002601" save="true" />
+      <Object index="0x1A00" sub="7" name="TxPdoMap7" type="u32" access="rw-preop" default="0x02002602" save="true" />
+      <Object index="0x1A01" sub="0" name="TxPdoByteSize" type="u8" access="ro" default="17" />
+    </Group>
+
+    <Group index="0x2000" name="ServoCommand">
+      <Object index="0x2000" sub="0" name="ControlSource" type="u8" access="rw" default="2" save="false" enum="0:disabled,1:serial_pdo,2:pwm_input,3:serial_sdo" />
+      <Object index="0x2001" sub="0" name="ServoMode" type="u8" access="rw-pdo" default="1" save="false" enum="0:current,1:speed,2:position" />
+      <Object index="0x2002" sub="0" name="ControlWord" type="u16" access="rw-pdo" default="0" save="false" />
+      <Object index="0x2003" sub="0" name="TargetCurrent_mA" type="i16" access="rw-pdo" default="0" save="false" />
+      <Object index="0x2004" sub="0" name="TargetSpeed" type="i32" access="rw-pdo" default="0" save="false" />
+      <Object index="0x2005" sub="0" name="TargetPosition" type="i32" access="rw-pdo" default="0" save="false" />
+    </Group>
+
+    <Group index="0x2100" name="ServoStatus">
+      <Object index="0x2100" sub="0" name="StatusWord" type="u16" access="ro-pdo" />
+      <Object index="0x2101" sub="0" name="ActualCurrent_mA" type="i16" access="ro-pdo" />
+      <Object index="0x2102" sub="0" name="ActualSpeed" type="i32" access="ro-pdo" />
+      <Object index="0x2103" sub="0" name="ActualPosition" type="i32" access="ro-pdo" />
+      <Object index="0x2104" sub="0" name="FaultCode" type="u16" access="ro-pdo" />
+      <Object index="0x2105" sub="0" name="DrivePower" type="i16" access="ro-pdo" />
+    </Group>
+
+    <Group index="0x2200" name="CurrentLoopPID">
+      <Object index="0x2200" sub="1" name="Kp" type="u16" access="rw" save="true" />
+      <Object index="0x2200" sub="2" name="Ki" type="u16" access="rw" save="true" />
+      <Object index="0x2200" sub="3" name="Kd" type="u16" access="rw" save="true" />
+      <Object index="0x2200" sub="4" name="IntegralMax" type="i32" access="rw" save="true" />
+      <Object index="0x2200" sub="5" name="OutMax" type="u16" access="rw" save="true" />
+      <Object index="0x2200" sub="6" name="OutMin" type="u16" access="rw" save="true" />
+      <Object index="0x2200" sub="7" name="Reset" type="u8" access="wo" />
+    </Group>
+
+    <Group index="0x2300" name="SpeedLoopPID">
+      <Object index="0x2300" sub="1" name="Kp" type="u16" access="rw" save="true" />
+      <Object index="0x2300" sub="2" name="Ki" type="u16" access="rw" save="true" />
+      <Object index="0x2300" sub="3" name="Kd" type="u16" access="rw" save="true" />
+      <Object index="0x2300" sub="4" name="IntegralMax" type="i32" access="rw" save="true" />
+      <Object index="0x2300" sub="5" name="OutMax" type="u16" access="rw" save="true" />
+      <Object index="0x2300" sub="6" name="OutMin" type="u16" access="rw" save="true" />
+      <Object index="0x2300" sub="7" name="Reset" type="u8" access="wo" />
+    </Group>
+
+    <Group index="0x2400" name="PositionLoopPID">
+      <Object index="0x2400" sub="1" name="Kp" type="u16" access="rw" save="true" />
+      <Object index="0x2400" sub="2" name="Ki" type="u16" access="rw" save="true" />
+      <Object index="0x2400" sub="3" name="Kd" type="u16" access="rw" save="true" />
+      <Object index="0x2400" sub="4" name="IntegralMax" type="i32" access="rw" save="true" />
+      <Object index="0x2400" sub="5" name="OutMax" type="u16" access="rw" save="true" />
+      <Object index="0x2400" sub="6" name="OutMin" type="u16" access="rw" save="true" />
+      <Object index="0x2400" sub="7" name="Reset" type="u8" access="wo" />
+    </Group>
+
+    <Group index="0x2500" name="PwmInputControl">
+      <Object index="0x2500" sub="0" name="PwmMode" type="u8" access="rw" default="1" save="true" />
+      <Object index="0x2501" sub="0" name="PwmMinUs" type="u16" access="rw" default="1000" save="true" />
+      <Object index="0x2502" sub="0" name="PwmMidUs" type="u16" access="rw" default="1500" save="true" />
+      <Object index="0x2503" sub="0" name="PwmMaxUs" type="u16" access="rw" default="2000" save="true" />
+      <Object index="0x2504" sub="0" name="PwmDeadbandUs" type="u16" access="rw" default="20" save="true" />
+      <Object index="0x2505" sub="0" name="PwmTimeoutMs" type="u16" access="rw" default="50" save="true" />
+      <Object index="0x2506" sub="0" name="PwmRawCapture" type="u16" access="ro" />
+    </Group>
+
+    <Group index="0x2600" name="LimitsAndProtection">
+      <Object index="0x2600" sub="0" name="TempLimit_C" type="i8" access="rw" default="40" save="true" />
+      <Object index="0x2601" sub="0" name="Vcc_mV" type="u16" access="ro-pdo" />
+      <Object index="0x2602" sub="0" name="Temperature_C" type="i8" access="ro-pdo" />
+      <Object index="0x2603" sub="0" name="PowerSaveVoltage_mV" type="u16" access="rw" default="4000" save="true" />
+      <Object index="0x2604" sub="0" name="SpeedMax" type="u16" access="rw" save="true" />
+      <Object index="0x2605" sub="0" name="AccelMax" type="u16" access="rw" save="true" />
+      <Object index="0x2606" sub="0" name="DecelMax" type="u16" access="rw" save="true" />
+      <Object index="0x2607" sub="0" name="DriveRunMode" type="u8" access="rw" default="0" save="true" />
+      <Object index="0x2608" sub="0" name="FailSafePolicy" type="u8" access="rw" default="0" save="true" enum="0:disable,1:brake,2:fallback_pwm" />
+    </Group>
+
+    <Group index="0x2700" name="Encoder">
+      <Object index="0x2700" sub="0" name="EncoderOffset" type="u16" access="rw" save="true" />
+      <Object index="0x2701" sub="0" name="EncoderVeer" type="bool" access="rw" save="true" />
+      <Object index="0x2702" sub="0" name="EncoderSingleTurn" type="u16" access="ro" />
+      <Object index="0x2703" sub="0" name="EncoderMultiTurn" type="i32" access="ro" />
+    </Group>
+
+    <Group index="0x2800" name="NvmSaveRestore">
+      <Object index="0x2800" sub="0" name="NvmCommand" type="u8" access="wo" enum="1:save,2:reload,3:erase" />
+      <Object index="0x2801" sub="0" name="NvmStatus" type="u8" access="ro" />
+      <Object index="0x2802" sub="0" name="NvmSequence" type="u32" access="ro" />
+    </Group>
+  </ObjectDictionary>
+
+  <PdoProfiles>
+    <RxPdo name="DefaultRx" maxBytes="16">
+      <Map index="0x2002" sub="0" type="u16" name="ControlWord" />
+      <Map index="0x2001" sub="0" type="u8" name="ServoMode" />
+      <Map index="0x2003" sub="0" type="i16" name="TargetCurrent_mA" />
+      <Map index="0x2004" sub="0" type="i32" name="TargetSpeed" />
+      <Map index="0x2005" sub="0" type="i32" name="TargetPosition" />
+    </RxPdo>
+
+    <TxPdo name="DefaultTx" maxBytes="20">
+      <Map index="0x2100" sub="0" type="u16" name="StatusWord" />
+      <Map index="0x2104" sub="0" type="u16" name="FaultCode" />
+      <Map index="0x2101" sub="0" type="i16" name="ActualCurrent_mA" />
+      <Map index="0x2102" sub="0" type="i32" name="ActualSpeed" />
+      <Map index="0x2103" sub="0" type="i32" name="ActualPosition" />
+      <Map index="0x2601" sub="0" type="u16" name="Vcc_mV" />
+      <Map index="0x2602" sub="0" type="i8" name="Temperature_C" />
+    </TxPdo>
+  </PdoProfiles>
+
+  <MasterHints>
+    <BusLoad normalBelowPercent="60" warnBelowPercent="80" rejectAtOrAbovePercent="80" />
+    <FastPdo overheadBytes="6" defaultSyncPeriodMs="10" />
+    <Cycle currentModeUs="1000" speedModeUs="5000" positionModeUs="10000" />
+    <Reconnect parallelMs="1000" ringChainMs="1000" />
+  </MasterHints>
+</TKServoSlave>
+
