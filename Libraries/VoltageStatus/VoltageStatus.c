@@ -12,7 +12,9 @@ void VoltageStatus_init(VoltageStatus* VoltageStatus,ADC_HandleTypeDef* hadc1,Pa
     VoltageStatus->param=params;
 
     HAL_ADCEx_Calibration_Start(VoltageStatus->hadc);
-    HAL_ADC_Start_DMA(VoltageStatus->hadc,(uint32_t *)VoltageStatus->param->VoltageBuf,5);
+    HAL_ADC_Start_DMA(VoltageStatus->hadc,
+                      (uint32_t *)VoltageStatus->param->VoltageBuf,
+                      ADC_STATUS_CONVERSION_COUNT);
     LPF_Filter_Init(&VoltageStatus->SampMaFilter,16);
 }
 
@@ -77,14 +79,85 @@ static int8_t STM32_Temp_Calc(uint16_t adc, uint16_t Vref)
 
 void VoltageStatus_AnalyzeData(VoltageStatus* VoltageStatus)
 {
-    VoltageStatus->param->INA181_mV=ADC_to_mV(VoltageStatus->param->VoltageBuf[0],VoltageStatus->param->VoltageBuf[4]);
-    VoltageStatus->param->VCC_mV=VoltageStatus_VccAdcToPower_mV(VoltageStatus->param->VoltageBuf[1],VoltageStatus->param->VoltageBuf[4]);
-    VoltageStatus->param->INA181REF_mV=ADC_to_mV(VoltageStatus->param->VoltageBuf[2],VoltageStatus->param->VoltageBuf[4]);
-    VoltageStatus->param->INA181_mA=(VoltageStatus->param->INA181_mV-VoltageStatus->param->INA181REF_mV)/(Sampling);
+    int32_t current_delta_mV;
+    int32_t current_mA;
+
+    VoltageStatus->param->INA181_mV=ADC_to_mV(VoltageStatus->param->VoltageBuf[0],VoltageStatus->param->VoltageBuf[3]);
+    VoltageStatus->param->VCC_mV=VoltageStatus_VccAdcToPower_mV(VoltageStatus->param->VoltageBuf[1],VoltageStatus->param->VoltageBuf[3]);
+    /* INA181 REF is tied to GND; PA4 is NC and is not part of the ADC scan. */
+    /* INA181 REF 接地；PA4 为 NC，不参与 ADC 扫描和电流偏置计算。 */
+    VoltageStatus->param->INA181REF_mV=0U;
+
+    /*
+     * The low-side shunt and INA181 reference used on this board measure
+     * current magnitude. Keep the subtraction signed so a small zero-current
+     * offset cannot wrap an unsigned value into a large current.
+     *
+     * 本板低侧分流电阻和 INA181 参考连接测量的是电流幅值。差值必须先按有符号数
+     * 计算，避免零电流偏置导致无符号下溢并变成很大的电流。
+     */
+    current_delta_mV = (int32_t)VoltageStatus->param->INA181_mV;
+    current_mA = (current_delta_mV * 1000) /
+                 ((int32_t)SamplingMR * (int32_t)SamplingGainV);
+    if (current_mA < 0)
+    {
+        current_mA = 0;
+    }
+    if (current_mA > INT16_MAX)
+    {
+        current_mA = INT16_MAX;
+    }
+    VoltageStatus->param->INA181_mA=(int16_t)current_mA;
 
     VoltageStatus->param->INA181_mA=LPF_Filter_Update(&VoltageStatus->SampMaFilter,VoltageStatus->param->INA181_mA);
 
-    VoltageStatus->param->Temp=STM32_Temp_Calc(VoltageStatus->param->VoltageBuf[3],VoltageStatus->param->VoltageBuf[4])-10;
+    VoltageStatus->param->Temp=STM32_Temp_Calc(VoltageStatus->param->VoltageBuf[2],VoltageStatus->param->VoltageBuf[3])-10;
+}
+
+void VoltageStatus_UpdateLogicalCurrent(VoltageStatus* VoltageStatus)
+{
+    Param *param = VoltageStatus->param;
+    int32_t logical_current = 0;
+
+    /*
+     * The shunt reports magnitude only. Active PWM uses the final physical
+     * command plus the complete-axis direction. Brake current has no PWM
+     * sign, so its logical torque direction is opposite the corrected speed.
+     * Coast/stop reports zero logical current.
+     *
+     * 分流采样只有幅值。主动 PWM 驱动时，根据最终物理指令和编码器方向恢复逻辑符号；
+     * 滑行或刹车状态没有明确的电流方向，因此返回 0，避免伪造双向实测值。
+     */
+    if ((param->DriveRunMode == 2U || param->DriveRunMode == 3U) &&
+        (param->DrivePower != 0))
+    {
+        logical_current = param->INA181_mA;
+        if (param->DrivePower < 0)
+        {
+            logical_current = -logical_current;
+        }
+        if (param->EncoderVeer)
+        {
+            logical_current = -logical_current;
+        }
+    }
+    else if ((param->DriveRunMode == 1U) && (param->EncoderSpeed != 0))
+    {
+        /* Dynamic braking torque opposes the corrected logical speed. */
+        /* 动态制动转矩与校正后的逻辑速度方向相反。 */
+        logical_current = (param->EncoderSpeed > 0) ?
+                          -param->INA181_mA : param->INA181_mA;
+    }
+
+    if (logical_current > INT16_MAX)
+    {
+        logical_current = INT16_MAX;
+    }
+    else if (logical_current < INT16_MIN)
+    {
+        logical_current = INT16_MIN;
+    }
+    param->CurrentLogical_mA = (int16_t)logical_current;
 }
 
 void TempLimit(const VoltageStatus* VoltageStatus)

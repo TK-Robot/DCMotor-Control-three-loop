@@ -38,15 +38,14 @@ typedef struct
 } ServoCommand;
 
 /**
- * @brief Runtime control source selected by TSBP.
- * @brief TSBP 选择的运行控制源。
+ * @brief Runtime control source selected by the command interface.
+ * @brief 命令接口选择的运行控制源。
  */
 typedef enum
 {
-    CONTROL_SOURCE_DISABLED = 0,  ///< Output disabled. / 输出关闭。
-    CONTROL_SOURCE_SERIAL_PDO = 1, ///< Cyclic serial PDO control. / 周期串口 PDO 控制。
-    CONTROL_SOURCE_PWM_INPUT = 2,  ///< PWM input control. / PWM 输入控制。
-    CONTROL_SOURCE_SERIAL_SDO = 3  ///< Low-rate serial SDO control. / 低频串口 SDO 控制。
+    CONTROL_SOURCE_DISABLED = 0,   ///< Output disabled. / 输出关闭。
+    CONTROL_SOURCE_SERIAL = 1,     ///< DYNAMIXEL serial control. / DYNAMIXEL 串口控制。
+    CONTROL_SOURCE_PWM_INPUT = 2   ///< PWM input control. / PWM 输入控制。
 } ControlSource;
 
 /**
@@ -62,9 +61,9 @@ typedef enum
 
 typedef enum
 {
-    TSBP_TOPOLOGY_PARALLEL_BUS = 0,
-    TSBP_TOPOLOGY_RING_CHAIN = 1
-} TsbpTopology;
+    BUS_TOPOLOGY_PARALLEL = 0,
+    BUS_TOPOLOGY_CHAIN = 1
+} BusTopology;
 
 typedef struct
 {
@@ -124,7 +123,8 @@ typedef struct
     uint8_t NodePosition;
     uint16_t ReplySlotUs;
 
-    uint32_t reserved[1];
+    uint8_t DrivePwmMode;
+    uint8_t reserved[3];
 } Param_SaveData;
 
 typedef struct
@@ -138,6 +138,7 @@ typedef struct
     uint16_t VoltageBuf[5];
     uint16_t INA181_mV;
     int16_t INA181_mA;
+    int16_t CurrentLogical_mA;
     int16_t ExpectMA;
     uint16_t INA181REF_mV;
     uint16_t VCC_mV;
@@ -150,6 +151,7 @@ typedef struct
     uint16_t EncoderValue;
     uint16_t EncoderOffset;
     uint16_t LastEncoderValue;
+    bool EncoderRebaseline;
     int16_t EncoderExpect;
     int32_t EncoderSpeed;
     int32_t EncoderSpeedExpect;
@@ -167,6 +169,7 @@ typedef struct
 
     bool DriveVeerFlag;
     uint8_t DriveRunMode;
+    uint8_t DrivePwmMode;
     int16_t DrivePower;
 
     PID_Int Pid_Pos;

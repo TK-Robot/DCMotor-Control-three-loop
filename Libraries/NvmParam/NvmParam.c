@@ -186,7 +186,8 @@ static void NvmParam_FillSaveData(Param_SaveData *data, const Param *param)
     data->DecelMax = param->DecelMax;
     data->EncoderVeer = param->EncoderVeer;
 
-    data->DriveRunMode = param->DriveRunMode;
+    data->DriveRunMode = param->DrivePwmMode;
+    data->DrivePwmMode = param->DrivePwmMode;
     data->DriveVeerFlag = param->DriveVeerFlag;
     data->ExpectMA = param->ExpectMA;
     data->PowerSaveVoltage_mV = param->PowerSaveVoltage_mV;
@@ -210,7 +211,8 @@ static void NvmParam_ApplySaveData(Param *param, const Param_SaveData *data)
     NvmParam_CopyPidFromSave(&param->Pid_Ele, &data->Pid_Ele);
 
     param->CycleTimeMs = data->CycleTimeMs;
-    param->TempLimit = data->TempLimit;
+    param->TempLimit = (data->TempLimit >= 20 && data->TempLimit <= 85) ?
+                       data->TempLimit : 40;
 
     param->EncoderOffset = data->EncoderOffset;
     param->EncoderExpect = data->EncoderExpect;
@@ -220,18 +222,23 @@ static void NvmParam_ApplySaveData(Param *param, const Param_SaveData *data)
     param->DecelMax = data->DecelMax;
     param->EncoderVeer = data->EncoderVeer;
 
-    param->DriveRunMode = data->DriveRunMode;
+    param->DriveRunMode = 0U;
+    param->DrivePwmMode = (data->DrivePwmMode == 4U || data->DriveRunMode == 4U) ? 4U :
+                          ((data->DrivePwmMode == 3U || data->DriveRunMode == 3U) ? 3U : 2U);
     param->DriveVeerFlag = data->DriveVeerFlag;
     param->ExpectMA = data->ExpectMA;
     param->PowerSaveVoltage_mV = data->PowerSaveVoltage_mV;
     param->BaudRate = NvmParam_IsSupportedBaud(data->BaudRate) ? data->BaudRate : 115200UL;
-    param->SerialWatchdogMs = (data->SerialWatchdogMs != 0U) ? data->SerialWatchdogMs : 100U;
+    /* Migrate the former factory default without overwriting an explicit custom value. */
+    /* 仅迁移旧的出厂默认值，不覆盖用户主动保存的自定义值。 */
+    param->SerialWatchdogMs = (data->SerialWatchdogMs == 100U || data->SerialWatchdogMs == 0U) ?
+                              500U : data->SerialWatchdogMs;
     param->PdoMissLimit = (data->PdoMissLimit != 0U) ? data->PdoMissLimit : 3U;
     param->FailSafePolicy = (data->FailSafePolicy <= FAILSAFE_FALLBACK_PWM) ?
                             data->FailSafePolicy : FAILSAFE_DISABLE_OUTPUT;
     param->NodeId = (data->NodeId != 0U && data->NodeId < 0x7FU) ? data->NodeId : 1U;
-    param->Topology = (data->Topology <= TSBP_TOPOLOGY_RING_CHAIN) ?
-                      data->Topology : TSBP_TOPOLOGY_PARALLEL_BUS;
+    param->Topology = (data->Topology <= BUS_TOPOLOGY_CHAIN) ?
+                      data->Topology : BUS_TOPOLOGY_PARALLEL;
     param->NodeCount = NvmParam_ClampNodeCount(data->NodeCount);
     param->NodePosition = NvmParam_ClampNodePosition(data->NodePosition, param->NodeCount);
     param->ReplySlotUs = (data->ReplySlotUs >= 50U && data->ReplySlotUs <= 1000U) ?

@@ -36,6 +36,10 @@ extern ADC_HandleTypeDef hadc1;
 
 /* USER CODE BEGIN Private defines */
 
+/* ADC ranks: INA181 OUT, bus voltage, temperature sensor, VREFINT. */
+/* ADC 排序：INA181 输出、母线电压、温度传感器、VREFINT。 */
+#define ADC_STATUS_CONVERSION_COUNT 4U
+
 /* USER CODE END Private defines */
 
 void MX_ADC1_Init(void);

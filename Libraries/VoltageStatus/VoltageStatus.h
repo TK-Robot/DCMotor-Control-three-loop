@@ -72,6 +72,12 @@ bool VoltageStatus_IsPowerLow(const VoltageStatus* VoltageStatus);
 void VoltageStatus_AnalyzeData(VoltageStatus* VoltageStatus);
 
 /**
+ * @brief Derive logical signed current from measured magnitude and drive direction.
+ * @brief 根据电流幅值、PWM 物理方向和编码器方向推导逻辑有符号电流。
+ */
+void VoltageStatus_UpdateLogicalCurrent(VoltageStatus* VoltageStatus);
+
+/**
  * @brief Disable motor output when MCU temperature exceeds the limit.
  * @brief MCU 温度超过限制时关闭电机输出。
  */

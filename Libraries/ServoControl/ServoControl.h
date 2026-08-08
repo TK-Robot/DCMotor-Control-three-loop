@@ -16,6 +16,9 @@
 #define SERVO_POSITION_PERIOD_MS     10U  ///< Position loop period. / 位置环周期。
 #define SERVO_TELEMETRY_PERIOD_MS    20U  ///< Telemetry period. / 遥测周期。
 #define SERVO_POWER_RECOVER_HYST_MV  500U ///< Power recovery hysteresis. / 电源恢复回差。
+#define SERVO_DECAY_FAST_ERROR_MA    50U  ///< Auto fast-decay entry error. / 自动快衰减进入误差。
+#define SERVO_DECAY_SLOW_ERROR_MA    20U  ///< Auto slow-decay return error. / 自动慢衰减回切误差。
+#define SERVO_DECAY_MIN_HOLD_MS      2U   ///< Minimum decay mode hold time. / 衰减模式最小保持时间。
 
 /**
  * @brief Runtime context for multi-rate servo control.
@@ -34,6 +37,10 @@ typedef struct
     bool telemetry_due;        ///< Telemetry should run this tick. / 本周期需要发送遥测。
     bool save_request;         ///< One-shot NVM save request. / 单次掉电保存请求。
     bool power_low_latched;    ///< Latched low-power protection state. / 低压保护锁存状态。
+    uint8_t decay_mode;        ///< Runtime decay mode selected by the 1 ms supervisor. / 1 ms 控制器选择的运行衰减模式。
+    uint8_t decay_hold_ms;     ///< Remaining hysteresis hold time. / 滞回保持剩余时间。
+    int16_t last_target_current_mA; ///< Previous target for reversal detection. / 上一周期电流目标，用于检测反向。
+    bool current_speed_limit_active; ///< Current-mode same-direction speed limit. / 电流模式同向转矩限速状态。
 } ServoControl;
 
 /**

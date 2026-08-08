@@ -17,6 +17,9 @@ void AD116_init(AD116* ad116,TIM_HandleTypeDef* htim, const uint32_t Channel1, c
     ad116->param->DriveRunMode=0;
     HAL_TIM_PWM_Start(ad116->htim,ad116->channel1);
     HAL_TIM_PWM_Start(ad116->htim,ad116->channel2);
+    /* Enable the internal CH4 compare used to trigger the ADC. */
+    /* 启用用于 ADC 触发的内部 CH4 比较事件。 */
+    HAL_TIM_OC_Start(ad116->htim, TIM_CHANNEL_4);
 }
 
 void AD116_setTimerFrequency(const AD116* ad116, const uint32_t psc, const uint32_t arr)
@@ -33,6 +36,9 @@ void AD116_setTimerFrequency(const AD116* ad116, const uint32_t psc, const uint3
     /* 更新定时器寄存器后重新启动 PWM。 */
     HAL_TIM_PWM_Start(ad116->htim, ad116->channel1);
     HAL_TIM_PWM_Start(ad116->htim, ad116->channel2);
+    __HAL_TIM_SET_COMPARE(ad116->htim, TIM_CHANNEL_4,
+                          (ad116->htim->Instance->ARR + 1U) / 2U);
+    HAL_TIM_OC_Start(ad116->htim, TIM_CHANNEL_4);
 }
 
 void AD116_Update(AD116* ad116, Param *param)

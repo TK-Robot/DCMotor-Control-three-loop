@@ -23,7 +23,7 @@
 #include "PWMCapture/PWMCapture.h"
 #include "NvmParam.h"
 #include "ServoControl.h"
-#include "Tsbp.h"
+#include "Dynamixel2.h"
 /* USER CODE END Includes */
 
 /* Private variables ---------------------------------------------------------*/
@@ -34,7 +34,7 @@ AD116 Drive;
 VoltageStatus Voltage;
 CaptureData PWMCaptureData;
 ServoControl Servo;
-TsbpContext Tsbp;
+Dynamixel2Context DynamixelBus;
 /* USER CODE END PV */
 
 void SystemClock_Config(void);
@@ -63,26 +63,32 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 
 void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 {
-  Tsbp_RxEventCallback(&Tsbp, huart, Size);
+  Dynamixel2_RxEventCallback(&DynamixelBus, huart, Size);
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart == &huart2)
   {
-    Tsbp_TxCpltCallback(&Tsbp, huart);
+    Dynamixel2_TxCpltCallback(&DynamixelBus, huart);
   }
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
-  if (huart->Instance == USART2)
+  if (huart == &huart2)
   {
     uint32_t err = HAL_UART_GetError(huart);
-    if ((err & HAL_UART_ERROR_DMA) != 0U)
+
+    if (err != HAL_UART_ERROR_NONE)
     {
+      /* Reset both directions so one DMA error cannot leave RX permanently stopped. */
+      /* 同时复位收发方向，避免一次 DMA 错误让 RX 永久停止。 */
+      (void)HAL_UART_AbortReceive(huart);
       HAL_UART_AbortTransmit(huart);
-      Tsbp_TxCpltCallback(&Tsbp, huart);
+      Dynamixel2_RecordUartError(&DynamixelBus, err);
+      Dynamixel2_TxCpltCallback(&DynamixelBus, huart);
+      (void)Dynamixel2_RestartRx(&DynamixelBus);
     }
   }
 }
@@ -92,22 +98,26 @@ static void App_DefaultParam(Param *param)
   param->CycleTimeMs = 1;
   param->TempLimit = 40;
   param->ExpectMA = 0;
+  param->CurrentLogical_mA = 0;
   param->EncoderExpect = 0;
   param->EncoderOffset = 3400;
-  param->SpeedMax = 30000;
+  param->EncoderVeer = false;
+  param->EncoderRebaseline = false;
+  param->SpeedMax = 45000;
   param->AccelMax = 60000;
   param->DecelMax = 60000;
   param->EncoderSpeedExpect = 0;
   param->PowerSaveVoltage_mV = 4000;
   param->DriveRunMode = 0;
+  param->DrivePwmMode = 2U;
   param->DrivePower = 0;
   param->BaudRate = 115200UL;
-  param->SerialWatchdogMs = 100U;
+  param->SerialWatchdogMs = 500U;
   param->PdoMissLimit = 3U;
   param->FailSafePolicy = FAILSAFE_DISABLE_OUTPUT;
   param->ControlSource = CONTROL_SOURCE_PWM_INPUT;
   param->NodeId = 1U;
-  param->Topology = TSBP_TOPOLOGY_PARALLEL_BUS;
+  param->Topology = BUS_TOPOLOGY_PARALLEL;
   param->NodeCount = 1U;
   param->NodePosition = 1U;
   param->ReplySlotUs = 120U;
@@ -146,7 +156,7 @@ int main(void)
   Param_KX.CycleTimeMs = 1;
   App_ApplyUartBaud(Param_KX.BaudRate);
 
-  Tsbp_Init(&Tsbp, &huart2, &Param_KX);
+  Dynamixel2_Init(&DynamixelBus, &huart2, &Param_KX);
   MT6701_init(&Encoder, &hi2c1, &Param_KX);
   AD116_init(&Drive, &htim3, TIM_CHANNEL_2, TIM_CHANNEL_3, &Param_KX);
   VoltageStatus_init(&Voltage, &hadc1, &Param_KX);
@@ -160,20 +170,23 @@ int main(void)
     CycleStart(&Drive, &htim14);
 
     ServoControl_Begin1ms(&Servo);
-    Tsbp_1msTick(&Tsbp);
-    ServoControl_SetCommand(&Servo, Tsbp_GetActiveCommand(&Tsbp));
+    Dynamixel2_1msTick(&DynamixelBus);
+    ServoControl_SetCommand(&Servo, Dynamixel2_GetActiveCommand(&DynamixelBus));
     VoltageStatus_AnalyzeData(&Voltage);
 
     if (ServoControl_IsSpeedDue(&Servo))
     {
       MT6701_Update(&Encoder);
-      MT6701_SpeedUpdate(&Encoder);
+      MT6701_SpeedUpdate(&Encoder,
+                         (uint32_t)SERVO_SPEED_PERIOD_MS * Param_KX.CycleTimeMs);
     }
 
     ServoControl_Run1ms(&Servo);
     AD116_Update(&Drive, &Param_KX);
+    VoltageStatus_UpdateLogicalCurrent(&Voltage);
 
-    if (ServoControl_ConsumeSaveRequest(&Servo) || Tsbp_ConsumeSaveRequest(&Tsbp))
+    if (ServoControl_ConsumeSaveRequest(&Servo)
+        || Dynamixel2_ConsumeSaveRequest(&DynamixelBus))
     {
       (void)NvmParam_Save(&Param_KX);
     }

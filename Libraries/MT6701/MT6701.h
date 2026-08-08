@@ -28,6 +28,7 @@ typedef struct
     I2C_HandleTypeDef* iic;     ///< I2C bus handle. / I2C 总线句柄。
     Param* param;               ///< Shared runtime parameters. / 共享运行参数。
     bool dma_busy;              ///< I2C DMA busy flag. / I2C DMA 忙标志。
+    bool position_initialized;  ///< First corrected sample has been accepted. / 首个校正位置样本是否已建立。
     LPF_Filter SpeedFilter;     ///< Speed low-pass filter. / 速度低通滤波器。
     LPF_Filter AccDecSpeedFilter; ///< Acceleration low-pass filter. / 加减速度低通滤波器。
 } MT6701;
@@ -54,6 +55,6 @@ void MT6701_CodedManage(MT6701* MT);
  * @brief Calculate encoder speed and acceleration from angle delta.
  * @brief 根据角度变化计算编码器速度和加速度。
  */
-void MT6701_SpeedUpdate(MT6701* MT);
+void MT6701_SpeedUpdate(MT6701* MT, uint32_t sample_period_ms);
 
 #endif // TRIPLE_CASCADECONTROLDCMOTOR_MT6701_H

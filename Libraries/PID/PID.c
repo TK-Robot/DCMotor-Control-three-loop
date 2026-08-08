@@ -41,19 +41,32 @@ void PID_Reset(PID_Int *pid)
 int32_t PID_AbsCalculate(PID_Int* pid,int32_t setValue,int32_t CurrentValue)
 {
     int32_t err,out;
+    int32_t previous_integral;
+    int32_t candidate_integral;
     int32_t K,I,D;
 
     err = setValue - CurrentValue;
     if(abs(err)<=PID_AbsDEADBAND) err=0;
 
-    pid->integral += err;
-    if (pid->integral > pid->integral_max) pid->integral = pid->integral_max;
-    else if (pid->integral < -pid->integral_max) pid->integral = -pid->integral_max;
+    previous_integral = pid->integral;
+    candidate_integral = pid->integral + err;
+    if (candidate_integral > pid->integral_max) candidate_integral = pid->integral_max;
+    else if (candidate_integral < -pid->integral_max) candidate_integral = -pid->integral_max;
 
     K=pid->Kp*err/PID_SCALE;
-    I=pid->Ki*pid->integral/PID_SCALE;
+    I=pid->Ki*candidate_integral/PID_SCALE;
     D=pid->Kd*(err-pid->prev_error)/PID_SCALE;
 
+    out=K+I+D;
+    /* Do not integrate further into output saturation; allow reverse error to unwind. */
+    /* 输出饱和且误差同向时停止积分；误差反向时允许积分退出饱和。 */
+    if ((out > pid->out_max && err > 0) ||
+        (out < -pid->out_max && err < 0))
+    {
+        candidate_integral = previous_integral;
+    }
+    pid->integral = candidate_integral;
+    I=pid->Ki*pid->integral/PID_SCALE;
     out=K+I+D;
     pid->prev_error=err;
 
@@ -112,12 +125,53 @@ int16_t PID_SpeedLoop(Param *param, int32_t target_speed)
 
 int16_t PID_CurrentLoop(Param *param, int16_t target_current_mA)
 {
-    int32_t pwm = PID_AbsCalculate(&param->Pid_PosEle, target_current_mA, param->INA181_mA);
+    int32_t target_magnitude = target_current_mA;
+    int32_t pwm_magnitude;
+    int32_t pwm;
+
+    if (target_magnitude < 0)
+    {
+        target_magnitude = -target_magnitude;
+    }
+
+    /*
+     * INA181 is fed by the single low-side shunt, so its firmware value is a
+     * non-negative magnitude. The sign comes from the commanded torque/current
+     * direction, not from the encoder direction setting.
+     *
+     * INA181 连接的是单个低侧分流电阻，因此固件中的采样值是非负幅值。电流方向
+     * 应来自目标转矩/电流的符号，而不是直接来自编码器方向设置。
+     */
+    if (target_magnitude == 0)
+    {
+        pwm_magnitude = 0;
+    }
+    else
+    {
+        pwm_magnitude = PID_AbsCalculate(&param->Pid_PosEle,
+                                         target_magnitude,
+                                         param->INA181_mA);
+        if (pwm_magnitude < 0)
+        {
+            pwm_magnitude = 0;
+        }
+    }
+
+    pwm = (target_current_mA < 0) ? -pwm_magnitude : pwm_magnitude;
 
     if (pwm > 1000) pwm = 1000;
     else if (pwm < -1000) pwm = -1000;
 
     param->ExpectMA = target_current_mA;
+    /* 0x2700 reverses the complete logical axis, including actuator output. */
+    /* 0x2700 反向的是完整逻辑轴，PWM 执行器输出也必须同步反向。 */
+    if (param->EncoderVeer)
+    {
+        pwm = -pwm;
+    }
+    /* EncoderVeer changes the logical axis, so only the actuator command is
+     * transformed here; the unidirectional current measurement is not negated.
+     * 编码器方向改变逻辑坐标，因此这里只变换执行器指令，不给单向电流采样取负。 */
     param->DrivePower = (int16_t)pwm;
     return (int16_t)pwm;
 }

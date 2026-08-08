@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.16)
 project(TripleCascadeServoSim C)
 
+enable_testing()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -28,10 +30,13 @@ target_include_directories(servo_tests PRIVATE
     ../Libraries/ServoControl
 )
 
-add_executable(tsbp_bus_sim
-    tsbp_bus_sim.c
+add_executable(dynamixel2_protocol_tests
+    dynamixel2_protocol_tests.c
+    ../Libraries/Dynamixel2/Dynamixel2Codec.c
 )
 
-add_executable(tsbp_protocol_tests
-    tsbp_protocol_tests.c
+target_include_directories(dynamixel2_protocol_tests PRIVATE
+    ../Libraries/Dynamixel2
 )
+
+add_test(NAME dynamixel2_protocol_tests COMMAND dynamixel2_protocol_tests)

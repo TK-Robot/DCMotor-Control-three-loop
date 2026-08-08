@@ -12,6 +12,7 @@ void MT6701_init(MT6701* MT,I2C_HandleTypeDef *hi2c1,Param* params)
 {
     MT->iic = hi2c1;
     MT->param=params;
+    MT->position_initialized = false;
     MT6701_Update(MT);
     LPF_Filter_Init(&MT->SpeedFilter,32);
     LPF_Filter_Init(&MT->AccDecSpeedFilter,8);
@@ -65,6 +66,31 @@ void MT6701_Update(MT6701* MT)
     }
     MT6701_CodedManage(MT);
 
+    if (MT->param->EncoderRebaseline)
+    {
+        /* Configuration changes start a new logical position baseline. */
+        /* 编码器配置变化后重新建立逻辑位置基准。 */
+        MT->param->EncoderRebaseline = false;
+        MT->param->EncoderMultiTurn = 0;
+        MT->param->LastEncoderValue = MT->param->EncoderValue;
+        MT->param->EncoderMultiTurnValue = MT->param->EncoderValue;
+        MT->param->LastEncoderMultiTurnValue = MT->param->EncoderValue;
+        MT->position_initialized = true;
+        return;
+    }
+
+    if (!MT->position_initialized)
+    {
+        /* Establish the baseline without treating the first sample as motion. */
+        /* 建立首个基准样本，避免把上电首帧误判为跨圈运动。 */
+        MT->param->LastEncoderValue = MT->param->EncoderValue;
+        MT->param->EncoderMultiTurnValue =
+            (int32_t)MT->param->EncoderValue + MT->param->EncoderMultiTurn * 16384L;
+        MT->param->LastEncoderMultiTurnValue = MT->param->EncoderMultiTurnValue;
+        MT->position_initialized = true;
+        return;
+    }
+
     int32_t diff = (int32_t)MT->param->EncoderValue
                  - (int32_t)MT->param->LastEncoderValue;
 
@@ -91,23 +117,36 @@ void MT6701_CodedManage(MT6701* MT)
     if (val < 0)        val += 16384;
     else if (val >= 16384) val -= 16384;
 
+    if (MT->param->EncoderVeer && val != 0)
+    {
+        val = 16384 - val;
+    }
+
     MT->param->EncoderValue = (uint16_t)val;
 }
 
-void MT6701_SpeedUpdate(MT6701* MT)
+void MT6701_SpeedUpdate(MT6701* MT, uint32_t sample_period_ms)
 {
     int32_t diff = (int32_t)MT->param->EncoderValue
                  - (int32_t)MT->param->LastEncoderValue;
+
+    if (sample_period_ms == 0U)
+    {
+        sample_period_ms = (MT->param->CycleTimeMs == 0U) ? 1U : MT->param->CycleTimeMs;
+    }
 
     /* Correct speed delta when the encoder crosses the zero point. */
     /* 编码器跨零时修正速度差值。 */
     if (diff >  8192) diff -= 16384;
     if (diff < -8192) diff += 16384;
 
-    MT->param->EncoderSpeed =(diff * 1000 / MT->param->CycleTimeMs);
+    /* Use the actual encoder refresh period, not the 1 ms base scheduler period. */
+    /* 使用编码器实际刷新周期，而不是 1 ms 基础调度周期。 */
+    MT->param->EncoderSpeed =(diff * 1000 / (int32_t)sample_period_ms);
     MT->param->EncoderSpeed=LPF_Filter_Update(&MT->SpeedFilter,MT->param->EncoderSpeed);
 
-    MT->param->AccDec=(MT->param->EncoderSpeed-MT->param->LastEncoderSpeed)*(1000 / MT->param->CycleTimeMs);
+    MT->param->AccDec=(MT->param->EncoderSpeed-MT->param->LastEncoderSpeed)
+                    * (1000 / (int32_t)sample_period_ms);
     MT->param->AccDec=LPF_Filter_Update(&MT->AccDecSpeedFilter,MT->param->AccDec);
 
     MT->param->LastEncoderSpeed=MT->param->EncoderSpeed;

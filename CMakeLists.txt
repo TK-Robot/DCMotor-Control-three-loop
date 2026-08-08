@@ -50,8 +50,10 @@ add_executable(${CMAKE_PROJECT_NAME}
         Libraries/NvmParam/NvmParam.h
         Libraries/ServoControl/ServoControl.c
         Libraries/ServoControl/ServoControl.h
-        Libraries/Tsbp/Tsbp.c
-        Libraries/Tsbp/Tsbp.h
+        Libraries/Dynamixel2/Dynamixel2Codec.c
+        Libraries/Dynamixel2/Dynamixel2Codec.h
+        Libraries/Dynamixel2/Dynamixel2.c
+        Libraries/Dynamixel2/Dynamixel2.h
 )
 
 # Add STM32CubeMX generated sources
@@ -79,7 +81,7 @@ target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
         Libraries/PWMCapture
         Libraries/NvmParam
         Libraries/ServoControl
-        Libraries/Tsbp
+        Libraries/Dynamixel2
 )
 
 # Add project symbols (macros)
