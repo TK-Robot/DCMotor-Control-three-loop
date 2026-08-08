@@ -23,8 +23,37 @@ extern "C" {
 #define DXL2_INST_STATUS        0x55U  /**< Slave response packet. / 从站状态响应包。 */
 #define DXL2_INST_SYNC_READ     0x82U  /**< Ordered multi-node read. / 按 ID 列表排序的多节点读取。 */
 #define DXL2_INST_SYNC_WRITE    0x83U  /**< Broadcast multi-node write. / 广播多节点写入。 */
-#define DXL2_MAX_PARAMETERS     96U    /**< Unstuffed parameter capacity. / 去填充后的参数容量。 */
-#define DXL2_MAX_PACKET_SIZE    128U   /**< Maximum encoded packet size. / 最大编码包长度。 */
+#define DXL2_INST_TK_SYNC_CONTROL 0xA0U /**< TK atomic broadcast control. / TK 原子广播控制。 */
+#define DXL2_MAX_PARAMETERS     160U   /**< Supports one eight-node TK control request. / 支持一个八节点 TK 控制请求。 */
+#define DXL2_MAX_PACKET_SIZE    256U   /**< Covers worst-case stuffing at maximum parameters. / 覆盖最大参数包的最坏填充长度。 */
+#define DXL2_FIXED_STATUS_RETURN_LEVEL 2U /**< All supported unicast instructions return Status. / 所有受支持单播指令均返回状态包。 */
+
+#define DXL2_TK_SYNC_HEADER_SIZE       10U   /**< Common A0 request fields. / A0 请求公共字段长度。 */
+#define DXL2_TK_SYNC_RECORD_SIZE       15U   /**< One node command record. / 单节点命令记录长度。 */
+#define DXL2_TK_SYNC_MAX_NODES         8U    /**< V1 bounded node count. / V1 有界节点数。 */
+#define DXL2_TK_ACK_SUPPORTED_MASK     0x03FFU /**< Supported optional ACK fields. / 支持的 ACK 可选字段。 */
+#define DXL2_TK_EXECUTE_NEXT_UPDATE    0U    /**< Apply at the next local update. / 在下一本地控制更新点生效。 */
+
+/**
+ * @brief Standard DYNAMIXEL Protocol 2.0 Status Packet error numbers.
+ * @brief 标准 DYNAMIXEL Protocol 2.0 状态包错误编号。
+ *
+ * Bit 7 is the hardware-alert flag; bits 0..6 contain one of these values.
+ * bit7 是硬件告警标志；bit0..6 保存下列错误编号之一。
+ */
+typedef enum
+{
+    DXL2_STATUS_ERROR_NONE = 0x00,
+    DXL2_STATUS_ERROR_RESULT_FAIL = 0x01,
+    DXL2_STATUS_ERROR_INSTRUCTION = 0x02,
+    DXL2_STATUS_ERROR_CRC = 0x03,
+    DXL2_STATUS_ERROR_DATA_RANGE = 0x04,
+    DXL2_STATUS_ERROR_DATA_LENGTH = 0x05,
+    DXL2_STATUS_ERROR_DATA_LIMIT = 0x06,
+    DXL2_STATUS_ERROR_ACCESS = 0x07
+} Dxl2StatusError;
+
+#define DXL2_STATUS_ALERT_MASK 0x80U /**< Hardware alert bit. / 硬件告警位。 */
 
 typedef enum
 {
@@ -52,6 +81,48 @@ typedef struct
     uint16_t consumed;        /**< Bytes safe to remove from the stream. / 可从流缓冲区移除的字节数。 */
     Dxl2Packet packet;        /**< Valid only when status is OK. / 仅在状态为 OK 时有效。 */
 } Dxl2DecodeResult;
+
+/**
+ * @brief Validated view of one TK Sync Control request. / 一个已校验 TK 同步控制请求的只读视图。
+ * @note record points into the decoded packet and is valid only while that packet lives.
+ * @note record 指向已解码数据包，其有效期不超过该数据包。
+ */
+typedef struct
+{
+    uint16_t sequence;
+    uint8_t execute_mode;
+    uint32_t execute_value;
+    uint16_t ack_mask;
+    uint8_t node_count;
+    uint8_t reply_index;
+    const uint8_t *record;
+} Dxl2TkSyncControlView;
+
+typedef enum
+{
+    DXL2_TK_SYNC_INVALID = 0, /**< Global structure error: discard without reply. / 全局结构错误：丢弃且不回复。 */
+    DXL2_TK_SYNC_NOT_TARGETED, /**< Valid request without this node. / 请求有效但不含本节点。 */
+    DXL2_TK_SYNC_TARGETED /**< Valid request containing this node. / 请求有效且包含本节点。 */
+} Dxl2TkSyncParseStatus;
+
+/**
+ * @brief Validate an A0 request and locate one node record. / 校验 A0 请求并定位一个节点记录。
+ * @note Duplicate IDs, unsupported ACK mask bits, and length mismatches invalidate the whole request.
+ * @note ID 重复、ACK Mask 保留位置位或长度不匹配都会使整包无效。
+ */
+Dxl2TkSyncParseStatus Dxl2_ParseTkSyncControl(const Dxl2Packet *packet,
+                                               uint8_t node_id,
+                                               Dxl2TkSyncControlView *view);
+
+/**
+ * @brief Return whether this firmware must emit a Status Packet for an instruction.
+ * @brief 判断本固件是否必须为该指令发送状态包。
+ *
+ * Supported unicast instructions always reply. Broadcast replies are limited to
+ * Ping and Sync Read; unsupported Bulk Read is intentionally not included.
+ * 受支持单播指令始终回复；广播仅 Ping 和 Sync Read 回复，未实现的 Bulk Read 不计入。
+ */
+bool Dxl2_ShouldReturnStatus(uint8_t packet_id, uint8_t instruction);
 
 /**
  * @brief Update CRC-16 using DYNAMIXEL polynomial 0x8005. / 使用 DYNAMIXEL 多项式 0x8005 更新 CRC-16。

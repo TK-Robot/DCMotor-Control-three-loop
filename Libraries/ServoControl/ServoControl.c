@@ -8,12 +8,34 @@
 
 #include "PID.h"
 
+#include <stddef.h>
+
 static bool ServoControl_IsPowerLow(const ServoControl *servo)
 {
     const Param *param = servo->param;
 
     return (param->PowerSaveVoltage_mV != 0U) &&
            (param->VCC_mV < param->PowerSaveVoltage_mV);
+}
+
+void ServoControl_BuildPwmPositionCommand(uint16_t low_width_us, bool signal_valid,
+                                          ServoCommand *command)
+{
+    uint16_t clamped_width = low_width_us;
+
+    if (command == NULL)
+    {
+        return;
+    }
+    command->mode = SERVO_MODE_POSITION;
+    command->enable = signal_valid;
+    command->target_current_mA = 0;
+    command->target_speed = 0;
+    if (clamped_width < SERVO_PWM_POSITION_MIN_US) clamped_width = SERVO_PWM_POSITION_MIN_US;
+    if (clamped_width > SERVO_PWM_POSITION_MAX_US) clamped_width = SERVO_PWM_POSITION_MAX_US;
+    command->target_position = ((int32_t)(clamped_width - SERVO_PWM_POSITION_MIN_US)
+                                * (SERVO_POSITION_COUNTS_PER_REV - 1L))
+                               / (SERVO_PWM_POSITION_MAX_US - SERVO_PWM_POSITION_MIN_US);
 }
 
 static bool ServoControl_IsPowerRecovered(const ServoControl *servo)
@@ -159,6 +181,8 @@ void ServoControl_Init(ServoControl *servo, Param *param)
     servo->save_request = false;
     servo->power_low_latched = false;
     servo->current_speed_limit_active = false;
+    param->OutputEnabled = false;
+    param->ProtectionFlags = PROTECTION_NONE;
     ServoControl_ResetDecayState(servo);
 }
 
@@ -211,6 +235,11 @@ void ServoControl_Begin1ms(ServoControl *servo)
 void ServoControl_Run1ms(ServoControl *servo)
 {
     Param *param = servo->param;
+    bool power_low = ServoControl_IsPowerLow(servo);
+    bool overtemperature = param->Temp > param->TempLimit;
+
+    param->OutputEnabled = false;
+    param->ProtectionFlags = PROTECTION_NONE;
 
     if (servo->command.mode != servo->last_mode)
     {
@@ -218,30 +247,50 @@ void ServoControl_Run1ms(ServoControl *servo)
         servo->last_mode = servo->command.mode;
     }
 
-    if (ServoControl_IsPowerLow(servo) || (param->Temp > param->TempLimit))
+    if (power_low)
     {
-        param->DriveRunMode = 0;
-        param->DrivePower = 0;
-        if (!servo->power_low_latched && ServoControl_IsPowerLow(servo))
+        if (!servo->power_low_latched)
         {
             servo->save_request = true;
         }
         servo->power_low_latched = true;
-        return;
     }
-
-    if (servo->power_low_latched && ServoControl_IsPowerRecovered(servo))
+    else if (servo->power_low_latched && ServoControl_IsPowerRecovered(servo))
     {
         servo->power_low_latched = false;
     }
 
-    if (!servo->command.enable || servo->power_low_latched)
+    if (servo->power_low_latched)
+    {
+        param->ProtectionFlags |= PROTECTION_UNDERVOLTAGE;
+    }
+    if (overtemperature)
+    {
+        param->ProtectionFlags |= PROTECTION_OVERTEMPERATURE;
+    }
+    if (param->ProtectionFlags != PROTECTION_NONE)
     {
         param->DriveRunMode = 0;
         param->DrivePower = 0;
         ServoControl_ResetLoops(servo);
         return;
     }
+
+    if (!servo->command.enable || servo->power_low_latched)
+    {
+        /* A latched fault may request passive braking; it never marks output enabled. */
+        /* 锁存故障可请求被动制动，但不会把输出状态标记为已使能。 */
+        param->DriveRunMode = (param->FaultCode != 0U
+                               && param->FailSafePolicy == FAILSAFE_BRAKE) ? 1U : 0U;
+        param->DrivePower = 0;
+        ServoControl_ResetLoops(servo);
+        return;
+    }
+
+    param->OutputEnabled = true;
+
+    /* A watchdog fault may coexist with valid PWM output only for explicit fallback policy 2. */
+    /* 仅在显式选择回退策略 2 时，看门狗故障才可与有效 PWM 输出同时存在。 */
 
     if (servo->command.mode == SERVO_MODE_POSITION)
     {

@@ -21,6 +21,83 @@ static void Dxl2_WriteU16(uint8_t *data, uint16_t value)
     data[1] = (uint8_t)(value >> 8);
 }
 
+static uint32_t Dxl2_ReadU32(const uint8_t *data)
+{
+    return (uint32_t)data[0] | ((uint32_t)data[1] << 8)
+           | ((uint32_t)data[2] << 16) | ((uint32_t)data[3] << 24);
+}
+
+Dxl2TkSyncParseStatus Dxl2_ParseTkSyncControl(const Dxl2Packet *packet,
+                                               uint8_t node_id,
+                                               Dxl2TkSyncControlView *view)
+{
+    uint8_t count;
+    uint8_t index;
+    uint8_t other;
+    const uint8_t *records;
+
+    if (packet == NULL || view == NULL || packet->id != DXL2_BROADCAST_ID
+        || packet->instruction != DXL2_INST_TK_SYNC_CONTROL
+        || packet->parameter_length < DXL2_TK_SYNC_HEADER_SIZE)
+    {
+        return DXL2_TK_SYNC_INVALID;
+    }
+    count = packet->parameters[9];
+    if (count == 0U || count > DXL2_TK_SYNC_MAX_NODES
+        || packet->parameter_length
+               != (uint16_t)(DXL2_TK_SYNC_HEADER_SIZE
+                             + (uint16_t)count * DXL2_TK_SYNC_RECORD_SIZE)
+        || (Dxl2_ReadU16(&packet->parameters[7])
+            & (uint16_t)~DXL2_TK_ACK_SUPPORTED_MASK) != 0U)
+    {
+        return DXL2_TK_SYNC_INVALID;
+    }
+
+    records = &packet->parameters[DXL2_TK_SYNC_HEADER_SIZE];
+    for (index = 0U; index < count; ++index)
+    {
+        uint8_t id = records[(uint16_t)index * DXL2_TK_SYNC_RECORD_SIZE];
+        if (id == 0U || id > 0xFCU)
+        {
+            return DXL2_TK_SYNC_INVALID;
+        }
+        for (other = 0U; other < index; ++other)
+        {
+            if (id == records[(uint16_t)other * DXL2_TK_SYNC_RECORD_SIZE])
+            {
+                return DXL2_TK_SYNC_INVALID;
+            }
+        }
+    }
+
+    memset(view, 0, sizeof(*view));
+    view->sequence = Dxl2_ReadU16(&packet->parameters[0]);
+    view->execute_mode = packet->parameters[2];
+    view->execute_value = Dxl2_ReadU32(&packet->parameters[3]);
+    view->ack_mask = Dxl2_ReadU16(&packet->parameters[7]);
+    view->node_count = count;
+    for (index = 0U; index < count; ++index)
+    {
+        const uint8_t *record = &records[(uint16_t)index * DXL2_TK_SYNC_RECORD_SIZE];
+        if (record[0] == node_id)
+        {
+            view->reply_index = index;
+            view->record = record;
+            return DXL2_TK_SYNC_TARGETED;
+        }
+    }
+    return DXL2_TK_SYNC_NOT_TARGETED;
+}
+
+bool Dxl2_ShouldReturnStatus(uint8_t packet_id, uint8_t instruction)
+{
+    if (packet_id == DXL2_BROADCAST_ID)
+    {
+        return instruction == DXL2_INST_PING || instruction == DXL2_INST_SYNC_READ;
+    }
+    return packet_id <= 0xFCU && instruction != DXL2_INST_STATUS;
+}
+
 uint16_t Dxl2_UpdateCrc(uint16_t accumulator, const uint8_t *data, uint16_t length)
 {
     uint16_t index;

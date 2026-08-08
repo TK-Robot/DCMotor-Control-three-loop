@@ -92,6 +92,8 @@ int16_t PID_Vel_Calc(PID_Int* pid, int32_t target, int32_t feedback)
     out = pid->prev_out + P + I + D;
     if (out > pid->out_max) out = pid->out_max;
     if (out < -pid->out_max) out = -pid->out_max;
+    if (out > 0 && out < pid->out_min) out = pid->out_min;
+    else if (out < 0 && -out < pid->out_min) out = -(int32_t)pid->out_min;
 
     pid->prev_feedback = feedback;
     pid->prev_prev_error = pid->prev_error;

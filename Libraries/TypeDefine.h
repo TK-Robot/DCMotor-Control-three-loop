@@ -59,6 +59,17 @@ typedef enum
     FAILSAFE_FALLBACK_PWM = 2    ///< Return to PWM input. / 回退到 PWM 输入。
 } FailSafePolicy;
 
+/**
+ * @brief Runtime output-inhibit reasons reported through Status Word.
+ * @brief 通过 Status Word 上报的运行期输出禁止原因。
+ */
+typedef enum
+{
+    PROTECTION_NONE = 0,
+    PROTECTION_UNDERVOLTAGE = (1U << 0),
+    PROTECTION_OVERTEMPERATURE = (1U << 1)
+} ProtectionFlag;
+
 typedef enum
 {
     BUS_TOPOLOGY_PARALLEL = 0,
@@ -129,11 +140,15 @@ typedef struct
 
 typedef struct
 {
-    uint8_t RxBuf[128];
-    uint8_t TxBuf[96];
+    /* One DMA transaction holds the complete maximum stuffed protocol packet. */
+    /* 一次 DMA 事务容纳完整的最大填充协议数据包。 */
+    uint8_t RxBuf[256];
+    uint8_t TxBuf[256];
     bool ReturnEn;
 
     uint16_t DutyRatio;
+    bool PwmInputValid;       ///< A recent valid external PWM command is present. / 存在近期有效的外部 PWM 命令。
+    bool OutputEnabled;       ///< Servo output is armed after protection checks. / 保护检查后伺服输出处于使能状态。
 
     uint16_t VoltageBuf[5];
     uint16_t INA181_mV;
@@ -190,6 +205,7 @@ typedef struct
     uint8_t NodePosition;
     uint16_t ReplySlotUs;
     uint16_t FaultCode;
+    uint8_t ProtectionFlags;
 } Param;
 
 #endif // TRIPLE_CASCADECONTROLDCMOTOR_TYPEDEFINE_H

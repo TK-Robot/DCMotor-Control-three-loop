@@ -10,8 +10,10 @@ void PWMCapture_Init(CaptureData* Data,TIM_HandleTypeDef *htim)
 {
     HAL_TIM_IC_Start_IT(htim, TIM_CHANNEL_1);
     Data->htim = htim;
-    Data->CaptureState = false;
-    Data->EdgeNumber= 0;
+    Data->DutyRatio = 0U;
+    Data->SignalAgeMs = UINT16_MAX;
+    Data->SignalValid = false;
+    Data->EdgeNumber = 0;
 }
 
 uint16_t PWMCapture_Calculate(CaptureData* Data,TIM_HandleTypeDef *htim)
@@ -42,7 +44,26 @@ uint16_t PWMCapture_Calculate(CaptureData* Data,TIM_HandleTypeDef *htim)
             uint16_t UpWidth= Data->CaptureOneDownTime-Data->CaptureOneUpTime;
             Data->EdgeNumber= 0;
             Data->DutyRatio = PulseWidth-UpWidth;
+            Data->SignalAgeMs = 0U;
+            Data->SignalValid = Data->DutyRatio >= PWM_INPUT_VALID_MIN_US
+                                && Data->DutyRatio <= PWM_INPUT_VALID_MAX_US;
         }
     }
     return Data->DutyRatio;
+}
+
+void PWMCapture_1msTick(CaptureData *Data)
+{
+    if (Data == NULL)
+    {
+        return;
+    }
+    if (Data->SignalAgeMs < UINT16_MAX)
+    {
+        ++Data->SignalAgeMs;
+    }
+    if (Data->SignalAgeMs > PWM_INPUT_TIMEOUT_MS)
+    {
+        Data->SignalValid = false;
+    }
 }

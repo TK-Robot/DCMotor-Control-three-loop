@@ -35,6 +35,7 @@ VoltageStatus Voltage;
 CaptureData PWMCaptureData;
 ServoControl Servo;
 Dynamixel2Context DynamixelBus;
+ServoCommand PwmInputCommand;
 /* USER CODE END PV */
 
 void SystemClock_Config(void);
@@ -96,6 +97,9 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 static void App_DefaultParam(Param *param)
 {
   param->CycleTimeMs = 1;
+  param->DutyRatio = 0U;
+  param->PwmInputValid = false;
+  param->OutputEnabled = false;
   param->TempLimit = 40;
   param->ExpectMA = 0;
   param->CurrentLogical_mA = 0;
@@ -122,15 +126,34 @@ static void App_DefaultParam(Param *param)
   param->NodePosition = 1U;
   param->ReplySlotUs = 120U;
   param->FaultCode = 0U;
+  param->ProtectionFlags = PROTECTION_NONE;
 }
 
-static void App_ApplyUartBaud(uint32_t baud)
+static bool App_ApplyUartBaud(uint32_t baud)
 {
   if (baud == 115200UL || baud == 500000UL || baud == 1000000UL || baud == 2000000UL)
   {
     huart2.Init.BaudRate = baud;
-    (void)HAL_UART_Init(&huart2);
+    return HAL_UART_Init(&huart2) == HAL_OK;
   }
+  return false;
+}
+
+static bool App_ReconfigureUartBaud(uint32_t baud)
+{
+  uint32_t previous_baud = huart2.Init.BaudRate;
+
+  /* The old-baud ACK already reached UART TC; now RX DMA can be restarted safely. */
+  /* 旧波特率 ACK 已到达 UART TC，此时可以安全重启 RX DMA。 */
+  (void)HAL_UART_AbortReceive(&huart2);
+  if (!App_ApplyUartBaud(baud) || !Dynamixel2_RestartRx(&DynamixelBus))
+  {
+    (void)HAL_UART_AbortReceive(&huart2);
+    (void)App_ApplyUartBaud(previous_baud);
+    (void)Dynamixel2_RestartRx(&DynamixelBus);
+    return false;
+  }
+  return true;
 }
 /* USER CODE END 0 */
 
@@ -154,7 +177,7 @@ int main(void)
   App_DefaultParam(&Param_KX);
   (void)NvmParam_Load(&Param_KX);
   Param_KX.CycleTimeMs = 1;
-  App_ApplyUartBaud(Param_KX.BaudRate);
+  (void)App_ApplyUartBaud(Param_KX.BaudRate);
 
   Dynamixel2_Init(&DynamixelBus, &huart2, &Param_KX);
   MT6701_init(&Encoder, &hi2c1, &Param_KX);
@@ -170,8 +193,28 @@ int main(void)
     CycleStart(&Drive, &htim14);
 
     ServoControl_Begin1ms(&Servo);
+    PWMCapture_1msTick(&PWMCaptureData);
+    Param_KX.PwmInputValid = PWMCaptureData.SignalValid;
     Dynamixel2_1msTick(&DynamixelBus);
-    ServoControl_SetCommand(&Servo, Dynamixel2_GetActiveCommand(&DynamixelBus));
+    {
+      uint32_t pending_baud;
+      if (Dynamixel2_ConsumeBaudRateChange(&DynamixelBus, &pending_baud))
+      {
+        bool applied = App_ReconfigureUartBaud(pending_baud);
+        Dynamixel2_CompleteBaudRateChange(&DynamixelBus, applied);
+      }
+    }
+    if (Param_KX.ControlSource == CONTROL_SOURCE_PWM_INPUT)
+    {
+      ServoControl_BuildPwmPositionCommand(Param_KX.DutyRatio,
+                                           Param_KX.PwmInputValid,
+                                           &PwmInputCommand);
+      ServoControl_SetCommand(&Servo, &PwmInputCommand);
+    }
+    else
+    {
+      ServoControl_SetCommand(&Servo, Dynamixel2_GetActiveCommand(&DynamixelBus));
+    }
     VoltageStatus_AnalyzeData(&Voltage);
 
     if (ServoControl_IsSpeedDue(&Servo))
@@ -185,10 +228,20 @@ int main(void)
     AD116_Update(&Drive, &Param_KX);
     VoltageStatus_UpdateLogicalCurrent(&Voltage);
 
-    if (ServoControl_ConsumeSaveRequest(&Servo)
-        || Dynamixel2_ConsumeSaveRequest(&DynamixelBus))
     {
-      (void)NvmParam_Save(&Param_KX);
+      bool servo_save_request = ServoControl_ConsumeSaveRequest(&Servo);
+      bool dynamixel_save_request = Dynamixel2_ConsumeSaveRequest(&DynamixelBus);
+      if (servo_save_request || dynamixel_save_request)
+      {
+        NvmParamStatus save_status = NvmParam_Save(&Param_KX);
+        if (dynamixel_save_request)
+        {
+          /* Finish the unicast transaction only after durable Flash completion. */
+          /* 仅在 Flash 持久化完成后结束单播保存事务。 */
+          Dynamixel2_CompleteSaveRequest(&DynamixelBus,
+                                         save_status == NVM_PARAM_OK);
+        }
+      }
     }
 
 #if TK_UART_LINK_TEST

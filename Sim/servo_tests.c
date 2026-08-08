@@ -49,6 +49,7 @@ static int test_pid_reset(void)
 static int test_loop_limits(void)
 {
     Param param = {0};
+    PID_Int velocity_pid = {0};
 
     default_param(&param);
     param.EncoderMultiTurnValue = 0;
@@ -56,6 +57,11 @@ static int test_loop_limits(void)
 
     param.EncoderSpeed = -50000;
     CHECK(abs(PID_SpeedLoop(&param, 50000)) <= param.Pid_PosVel.out_max);
+
+    velocity_pid.Kp = 1000;
+    velocity_pid.out_max = 100;
+    velocity_pid.out_min = 10;
+    CHECK(PID_Vel_Calc(&velocity_pid, 1, 0) == 10);
 
     param.INA181_mA = 5000;
     CHECK(abs(PID_CurrentLoop(&param, 5000)) <= 1000);
@@ -78,6 +84,26 @@ static int test_loop_limits(void)
     return 0;
 }
 
+static int test_pwm_position_command(void)
+{
+    ServoCommand command = {0};
+
+    ServoControl_BuildPwmPositionCommand(1000U, true, &command);
+    CHECK(command.mode == SERVO_MODE_POSITION);
+    CHECK(command.enable);
+    CHECK(command.target_position == 0);
+
+    ServoControl_BuildPwmPositionCommand(1500U, true, &command);
+    CHECK(command.target_position >= 8190 && command.target_position <= 8192);
+
+    ServoControl_BuildPwmPositionCommand(2000U, true, &command);
+    CHECK(command.target_position == 16383);
+
+    ServoControl_BuildPwmPositionCommand(1500U, false, &command);
+    CHECK(!command.enable);
+    return 0;
+}
+
 static int test_mode_switch_and_power_save(void)
 {
     Param param = {0};
@@ -93,6 +119,7 @@ static int test_mode_switch_and_power_save(void)
     ServoControl_SetCommand(&servo, &command);
     ServoControl_Begin1ms(&servo);
     ServoControl_Run1ms(&servo);
+    CHECK(param.OutputEnabled);
 
     param.Pid_PosVel.prev_out = 123;
     command.mode = SERVO_MODE_POSITION;
@@ -108,6 +135,80 @@ static int test_mode_switch_and_power_save(void)
     CHECK(ServoControl_ConsumeSaveRequest(&servo));
     CHECK(!ServoControl_ConsumeSaveRequest(&servo));
     CHECK(param.DrivePower == 0);
+    CHECK(!param.OutputEnabled);
+    return 0;
+}
+
+static int test_fault_brake_policy(void)
+{
+    Param param = {0};
+    ServoControl servo;
+    ServoCommand command = {0};
+
+    default_param(&param);
+    param.FaultCode = 0x000AU;
+    param.FailSafePolicy = FAILSAFE_BRAKE;
+    ServoControl_Init(&servo, &param);
+    ServoControl_SetCommand(&servo, &command);
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+
+    CHECK(param.DriveRunMode == 1U);
+    CHECK(param.DrivePower == 0);
+    CHECK(!param.OutputEnabled);
+    return 0;
+}
+
+static int test_protection_inhibit_and_watchdog_fallback(void)
+{
+    Param param = {0};
+    ServoControl servo;
+    ServoCommand command = {0};
+
+    default_param(&param);
+    param.FailSafePolicy = FAILSAFE_FALLBACK_PWM;
+    param.FaultCode = 0x000AU;
+    command.mode = SERVO_MODE_CURRENT;
+    command.enable = true;
+    command.target_current_mA = 100;
+    ServoControl_Init(&servo, &param);
+    ServoControl_SetCommand(&servo, &command);
+
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK(param.OutputEnabled);
+    CHECK(param.FaultCode == 0x000AU);
+    CHECK(param.ProtectionFlags == PROTECTION_NONE);
+
+    param.VCC_mV = 3900U;
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK(!param.OutputEnabled);
+    CHECK(param.DrivePower == 0);
+    CHECK((param.ProtectionFlags & PROTECTION_UNDERVOLTAGE) != 0U);
+
+    param.VCC_mV = 4400U;
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK((param.ProtectionFlags & PROTECTION_UNDERVOLTAGE) != 0U);
+
+    param.VCC_mV = 4501U;
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK((param.ProtectionFlags & PROTECTION_UNDERVOLTAGE) == 0U);
+    CHECK(param.OutputEnabled);
+
+    param.Temp = 81;
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK(!param.OutputEnabled);
+    CHECK((param.ProtectionFlags & PROTECTION_OVERTEMPERATURE) != 0U);
+
+    param.Temp = 80;
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK((param.ProtectionFlags & PROTECTION_OVERTEMPERATURE) == 0U);
+    CHECK(param.OutputEnabled);
     return 0;
 }
 
@@ -219,7 +320,10 @@ int main(void)
 {
     CHECK(test_pid_reset() == 0);
     CHECK(test_loop_limits() == 0);
+    CHECK(test_pwm_position_command() == 0);
     CHECK(test_mode_switch_and_power_save() == 0);
+    CHECK(test_fault_brake_policy() == 0);
+    CHECK(test_protection_inhibit_and_watchdog_fallback() == 0);
     CHECK(test_speed_and_position_cascades() == 0);
     CHECK(test_auto_decay_current_hysteresis() == 0);
     CHECK(test_current_mode_speed_limit() == 0);

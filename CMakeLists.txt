@@ -98,6 +98,15 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
 )
 
+# Firmware builds use link-time optimization to keep the protocol and control
+# stack inside the 30 KiB application region. Debug retains its DWARF symbols.
+# 固件构建使用链接时优化，确保协议与控制代码保持在 30 KiB 应用区内；
+# Debug 仍保留 DWARF 调试符号。
+if(CMAKE_BUILD_TYPE MATCHES "^(Debug|Release)$")
+    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE -flto -fno-fat-lto-objects)
+    target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -flto)
+endif()
+
 # STM32G030 uses a Cortex-M0+ core without hardware FPU.
 target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE
     ARM_MATH_CM0PLUS

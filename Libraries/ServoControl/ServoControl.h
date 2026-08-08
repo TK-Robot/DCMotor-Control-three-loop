@@ -19,6 +19,9 @@
 #define SERVO_DECAY_FAST_ERROR_MA    50U  ///< Auto fast-decay entry error. / 自动快衰减进入误差。
 #define SERVO_DECAY_SLOW_ERROR_MA    20U  ///< Auto slow-decay return error. / 自动慢衰减回切误差。
 #define SERVO_DECAY_MIN_HOLD_MS      2U   ///< Minimum decay mode hold time. / 衰减模式最小保持时间。
+#define SERVO_PWM_POSITION_MIN_US  1000U  ///< PWM command for logical position zero. / 逻辑零位对应的 PWM 脉宽。
+#define SERVO_PWM_POSITION_MAX_US  2000U  ///< PWM command for one-turn maximum. / 单圈最大位置对应的 PWM 脉宽。
+#define SERVO_POSITION_COUNTS_PER_REV 16384L ///< MT6701 counts per revolution. / MT6701 每圈计数。
 
 /**
  * @brief Runtime context for multi-rate servo control.
@@ -90,5 +93,15 @@ bool ServoControl_ConsumeSaveRequest(ServoControl *servo);
  * @brief 清空 PID 历史状态和速度规划状态。
  */
 void ServoControl_ResetLoops(ServoControl *servo);
+
+/**
+ * @brief Convert a validated active-low PWM pulse into a one-turn position command.
+ * @brief 将已校验的低电平 PWM 脉宽转换为单圈位置命令。
+ * @param low_width_us Captured low-level width in microseconds. / 捕获的低电平宽度，单位微秒。
+ * @param signal_valid False disarms the generated command. / 为 false 时生成未使能命令。
+ * @param command Output command owned by the caller. / 调用者持有的输出命令。
+ */
+void ServoControl_BuildPwmPositionCommand(uint16_t low_width_us, bool signal_valid,
+                                          ServoCommand *command);
 
 #endif // TRIPLE_CASCADECONTROLDCMOTOR_SERVOCONTROL_H
