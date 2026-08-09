@@ -36,7 +36,7 @@
  */
 typedef struct
 {
-    ADC_HandleTypeDef* hadc; ///< ADC peripheral handle. / ADC 外设句柄。
+    ADC_TypeDef *adc;        ///< ADC peripheral instance. / ADC 外设实例。
     Param* param;            ///< Shared runtime parameters. / 共享运行参数。
     LPF_Filter SampMaFilter; ///< Current measurement low-pass filter. / 电流测量低通滤波器。
 } VoltageStatus;
@@ -45,7 +45,7 @@ typedef struct
  * @brief Calibrate ADC and start DMA sampling.
  * @brief 校准 ADC 并启动 DMA 采样。
  */
-void VoltageStatus_init(VoltageStatus* VoltageStatus,ADC_HandleTypeDef* hadc1,Param* params);
+void VoltageStatus_init(VoltageStatus *status, ADC_TypeDef *adc, Param *params);
 
 /**
  * @brief Convert ADC sample to millivolts using VREFINT correction.

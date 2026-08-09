@@ -34,16 +34,19 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -fdata-sections -ffunction-sections")
 #
 # Change only TK_SIZE_PROFILE when you need a different size/debug tradeoff:
 #   "debug_full"  : -O0 -g3, easiest source-level debug, usually too large.
-#   "debug_small" : -Os -g3, CLion Debug can link while keeping debug info.
+#   "debug"       : -Og -g3, usable source debugging with bounded code size.
+#   "debug_small" : -Os -g3, symbols retained but values may be optimized out.
 #   "min_size"    : -Os -g0, smallest firmware.
-set(TK_SIZE_PROFILE "debug_small")
+set(TK_SIZE_PROFILE "debug")
 
 if(TK_SIZE_PROFILE STREQUAL "debug_full")
     set(TK_DEBUG_FLAGS "-O0 -g3")
 elseif(TK_SIZE_PROFILE STREQUAL "min_size")
     set(TK_DEBUG_FLAGS "-Os -g0")
-else()
+elseif(TK_SIZE_PROFILE STREQUAL "debug_small")
     set(TK_DEBUG_FLAGS "-Os -g3")
+else()
+    set(TK_DEBUG_FLAGS "-Og -g3 -fno-omit-frame-pointer")
 endif()
 
 set(CMAKE_C_FLAGS_DEBUG "${TK_DEBUG_FLAGS}")

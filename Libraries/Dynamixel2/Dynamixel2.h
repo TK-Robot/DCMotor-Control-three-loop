@@ -46,7 +46,7 @@ typedef struct
  */
 typedef struct
 {
-    UART_HandleTypeDef *huart;       /**< Non-owning UART2 handle. / 非持有的 UART2 句柄。 */
+    USART_TypeDef *uart;             /**< Non-owning USART instance. / 非持有的 USART 外设实例。 */
     Param *param;                    /**< Shared live parameter/state owner. / 共享运行参数与状态所有者。 */
     ServoCommand pending_command;   /**< Validated command awaiting its apply tick. / 已校验、等待生效时刻的命令。 */
     ServoCommand active_command;    /**< Command consumed by ServoControl. / ServoControl 当前使用的命令。 */
@@ -87,7 +87,7 @@ typedef struct
     uint8_t registered_data[DXL2_MAX_PARAMETERS]; /**< Registered data snapshot. / 已登记数据快照。 */
     uint16_t last_diag_error;        /**< Latest communication diagnostic code. / 最近通信诊断码。 */
     uint32_t diagnostic_error_count; /**< Saturating aggregate diagnostic count. / 饱和累计诊断计数。 */
-    uint32_t last_uart_error;        /**< Raw HAL UART error flags. / 最近一次 HAL UART 原始错误位。 */
+    uint32_t last_uart_error;        /**< Raw LL USART/DMA error flags. / 最近一次 LL USART/DMA 原始错误位。 */
     uint32_t uart_error_count;       /**< Saturating UART error count. / 饱和累计 UART 错误数。 */
     uint32_t rx_packet_count;        /**< Valid decoded packet count. / 有效解码包计数。 */
     uint32_t rx_crc_error_count;     /**< CRC rejection count. / CRC 拒收计数。 */
@@ -103,7 +103,7 @@ typedef struct
  * @param huart UART2 handle used for the servo bus. / 伺服总线使用的 UART2 句柄。
  * @param param Shared live parameter/state object. / 共享运行参数与状态对象。
  */
-void Dynamixel2_Init(Dynamixel2Context *context, UART_HandleTypeDef *huart, Param *param);
+void Dynamixel2_Init(Dynamixel2Context *context, USART_TypeDef *uart, Param *param);
 
 /**
  * @brief Re-arm receive-to-idle DMA after an error. / 发生错误后重新启动空闲 DMA 接收。
@@ -118,16 +118,26 @@ void Dynamixel2_RecordUartError(Dynamixel2Context *context, uint32_t error_code)
 
 /**
  * @brief Copy one DMA idle chunk, re-arm RX, and consume complete packets. / 复制一次 DMA 空闲分段、重启接收并处理完整包。
- * @note Call only from HAL_UARTEx_RxEventCallback for the configured UART. / 仅从已配置 UART 的 HAL 回调调用。
+ * @note Called by the LL USART/DMA interrupt path after DMA is stopped. / 由 LL USART/DMA 中断路径在停止 DMA 后调用。
  */
-void Dynamixel2_RxEventCallback(Dynamixel2Context *context,
-                                const UART_HandleTypeDef *huart, uint16_t size);
+void Dynamixel2_RxEventCallback(Dynamixel2Context *context, uint16_t size);
 
 /**
  * @brief Release the DMA TX buffer and start one queued response. / 释放 DMA 发送缓冲并启动一个排队响应。
  */
-void Dynamixel2_TxCpltCallback(Dynamixel2Context *context,
-                               const UART_HandleTypeDef *huart);
+void Dynamixel2_TxCpltCallback(Dynamixel2Context *context);
+
+/**
+ * @brief Handle USART IDLE, TC, and receive-error interrupts.
+ * @brief 处理 USART 空闲、发送完成和接收错误中断。
+ */
+void Dynamixel2_UartIrqHandler(Dynamixel2Context *context);
+
+/**
+ * @brief Handle USART RX/TX DMA channel interrupts.
+ * @brief 处理 USART 收发 DMA 通道中断。
+ */
+void Dynamixel2_DmaIrqHandler(Dynamixel2Context *context);
 
 /**
  * @brief Advance watchdog/scheduling state from the bounded 1 ms loop. / 在有界 1 ms 循环中推进看门狗与命令调度。

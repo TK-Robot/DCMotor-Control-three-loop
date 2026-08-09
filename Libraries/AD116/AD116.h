@@ -20,7 +20,7 @@
  */
 typedef struct
 {
-    TIM_HandleTypeDef* htim; ///< PWM timer handle. / PWM 定时器句柄。
+    TIM_TypeDef *timer;      ///< PWM timer instance. / PWM 定时器实例。
     Param *param;            ///< Shared runtime parameters. / 共享运行参数。
     uint32_t channel1;       ///< PWM channel 1. / PWM 通道 1。
     uint32_t channel2;       ///< PWM channel 2. / PWM 通道 2。
@@ -30,7 +30,8 @@ typedef struct
  * @brief Initialize PWM outputs for the motor driver.
  * @brief 初始化电机驱动 PWM 输出。
  */
-void AD116_init(AD116* ad116,TIM_HandleTypeDef* htim, uint32_t Channel1, uint32_t Channel2,Param *params);
+void AD116_init(AD116 *ad116, TIM_TypeDef *timer, uint32_t channel1,
+                uint32_t channel2, Param *params);
 
 /**
  * @brief Update timer prescaler and auto-reload value.
@@ -48,12 +49,12 @@ void AD116_Update(AD116* ad116, Param* param);
  * @brief Start loop timing measurement.
  * @brief 开始控制循环计时。
  */
-void CycleStart(AD116* ad116,TIM_HandleTypeDef* htim);
+void CycleStart(AD116 *ad116, TIM_TypeDef *timer);
 
 /**
  * @brief Block until the configured control period has elapsed.
  * @brief 阻塞等待到配置的控制周期结束。
  */
-void CycleBlockingTimer(AD116* ad116,TIM_HandleTypeDef* htim);
+void CycleBlockingTimer(AD116 *ad116, TIM_TypeDef *timer);
 
 #endif // TRIPLE_CASCADECONTROLDCMOTOR_AD116_H

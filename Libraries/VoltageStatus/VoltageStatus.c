@@ -6,16 +6,37 @@
 
 #include "VoltageStatus.h"
 
-void VoltageStatus_init(VoltageStatus* VoltageStatus,ADC_HandleTypeDef* hadc1,Param* params)
-{
-    VoltageStatus->hadc=hadc1;
-    VoltageStatus->param=params;
+#include <stddef.h>
 
-    HAL_ADCEx_Calibration_Start(VoltageStatus->hadc);
-    HAL_ADC_Start_DMA(VoltageStatus->hadc,
-                      (uint32_t *)VoltageStatus->param->VoltageBuf,
-                      ADC_STATUS_CONVERSION_COUNT);
-    LPF_Filter_Init(&VoltageStatus->SampMaFilter,16);
+void VoltageStatus_init(VoltageStatus *status, ADC_TypeDef *adc, Param *params)
+{
+    status->adc = adc;
+    status->param = params;
+
+    /* Keep current sampling synchronized to the TIM3 PWM-center trigger. */
+    /* 保持电流采样与 TIM3 PWM 中点触发同步。 */
+    LL_ADC_REG_SetTriggerSource(adc, LL_ADC_REG_TRIG_EXT_TIM3_TRGO);
+
+    LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_1);
+    LL_DMA_ClearFlag_GI1(DMA1);
+    LL_DMA_SetPeriphAddress(DMA1, LL_DMA_CHANNEL_1,
+                            LL_ADC_DMA_GetRegAddr(adc,
+                                                 LL_ADC_DMA_REG_REGULAR_DATA));
+    LL_DMA_SetMemoryAddress(DMA1, LL_DMA_CHANNEL_1,
+                            (uint32_t)status->param->VoltageBuf);
+    LL_DMA_SetDataLength(DMA1, LL_DMA_CHANNEL_1,
+                         ADC_STATUS_CONVERSION_COUNT);
+
+    LL_ADC_StartCalibration(adc);
+    while (LL_ADC_IsCalibrationOnGoing(adc) != 0U) {}
+    for (volatile uint32_t wait = 0U; wait < 128U; ++wait) {}
+
+    LL_ADC_ClearFlag_ADRDY(adc);
+    LL_ADC_Enable(adc);
+    while (LL_ADC_IsActiveFlag_ADRDY(adc) == 0U) {}
+    LL_DMA_EnableChannel(DMA1, LL_DMA_CHANNEL_1);
+    LL_ADC_REG_StartConversion(adc);
+    LPF_Filter_Init(&status->SampMaFilter,16);
 }
 
 uint16_t ADC_to_mV(uint16_t adc, uint16_t Vref)
@@ -112,6 +133,13 @@ void VoltageStatus_AnalyzeData(VoltageStatus* VoltageStatus)
     VoltageStatus->param->INA181_mA=LPF_Filter_Update(&VoltageStatus->SampMaFilter,VoltageStatus->param->INA181_mA);
 
     VoltageStatus->param->Temp=STM32_Temp_Calc(VoltageStatus->param->VoltageBuf[2],VoltageStatus->param->VoltageBuf[3])-10;
+
+    /* The generated ADC uses one four-rank scan; restart it for the next 1 ms sample. */
+    /* 当前 ADC 配置为四通道单次扫描；每个 1 ms 周期重新启动下一次采样。 */
+    if (LL_ADC_REG_IsConversionOngoing(VoltageStatus->adc) == 0U)
+    {
+        LL_ADC_REG_StartConversion(VoltageStatus->adc);
+    }
 }
 
 void VoltageStatus_UpdateLogicalCurrent(VoltageStatus* VoltageStatus)

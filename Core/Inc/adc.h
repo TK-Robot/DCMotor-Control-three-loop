@@ -32,8 +32,6 @@ extern "C" {
 
 /* USER CODE END Includes */
 
-extern ADC_HandleTypeDef hadc1;
-
 /* USER CODE BEGIN Private defines */
 
 /* ADC ranks: INA181 OUT, bus voltage, temperature sensor, VREFINT. */

@@ -22,6 +22,8 @@
 #include "stm32g0xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "Dynamixel2.h"
+#include "PWMCapture/PWMCapture.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -55,12 +57,11 @@
 /* USER CODE END 0 */
 
 /* External variables --------------------------------------------------------*/
-extern DMA_HandleTypeDef hdma_adc1;
-extern TIM_HandleTypeDef htim16;
-extern DMA_HandleTypeDef hdma_usart2_rx;
-extern DMA_HandleTypeDef hdma_usart2_tx;
-extern UART_HandleTypeDef huart2;
+
 /* USER CODE BEGIN EV */
+extern Dynamixel2Context DynamixelBus;
+extern CaptureData PWMCaptureData;
+extern Param Param_KX;
 
 /* USER CODE END EV */
 
@@ -131,7 +132,7 @@ void SysTick_Handler(void)
   /* USER CODE BEGIN SysTick_IRQn 0 */
 
   /* USER CODE END SysTick_IRQn 0 */
-  HAL_IncTick();
+
   /* USER CODE BEGIN SysTick_IRQn 1 */
 
   /* USER CODE END SysTick_IRQn 1 */
@@ -152,7 +153,6 @@ void DMA1_Channel1_IRQHandler(void)
   /* USER CODE BEGIN DMA1_Channel1_IRQn 0 */
 
   /* USER CODE END DMA1_Channel1_IRQn 0 */
-  HAL_DMA_IRQHandler(&hdma_adc1);
   /* USER CODE BEGIN DMA1_Channel1_IRQn 1 */
 
   /* USER CODE END DMA1_Channel1_IRQn 1 */
@@ -166,10 +166,8 @@ void DMA1_Ch4_5_DMAMUX1_OVR_IRQHandler(void)
   /* USER CODE BEGIN DMA1_Ch4_5_DMAMUX1_OVR_IRQn 0 */
 
   /* USER CODE END DMA1_Ch4_5_DMAMUX1_OVR_IRQn 0 */
-  HAL_DMA_IRQHandler(&hdma_usart2_rx);
-  HAL_DMA_IRQHandler(&hdma_usart2_tx);
   /* USER CODE BEGIN DMA1_Ch4_5_DMAMUX1_OVR_IRQn 1 */
-
+  Dynamixel2_DmaIrqHandler(&DynamixelBus);
   /* USER CODE END DMA1_Ch4_5_DMAMUX1_OVR_IRQn 1 */
 }
 
@@ -181,9 +179,12 @@ void TIM16_IRQHandler(void)
   /* USER CODE BEGIN TIM16_IRQn 0 */
 
   /* USER CODE END TIM16_IRQn 0 */
-  HAL_TIM_IRQHandler(&htim16);
   /* USER CODE BEGIN TIM16_IRQn 1 */
-
+  if (LL_TIM_IsEnabledIT_CC1(TIM16) && LL_TIM_IsActiveFlag_CC1(TIM16))
+  {
+    LL_TIM_ClearFlag_CC1(TIM16);
+    Param_KX.DutyRatio = PWMCapture_Calculate(&PWMCaptureData, TIM16);
+  }
   /* USER CODE END TIM16_IRQn 1 */
 }
 
@@ -195,9 +196,8 @@ void USART2_IRQHandler(void)
   /* USER CODE BEGIN USART2_IRQn 0 */
 
   /* USER CODE END USART2_IRQn 0 */
-  HAL_UART_IRQHandler(&huart2);
   /* USER CODE BEGIN USART2_IRQn 1 */
-
+  Dynamixel2_UartIrqHandler(&DynamixelBus);
   /* USER CODE END USART2_IRQn 1 */
 }
 

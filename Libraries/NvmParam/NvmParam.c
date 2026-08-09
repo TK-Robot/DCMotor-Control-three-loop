@@ -2,8 +2,7 @@
 
 #include <string.h>
 
-#include "stm32g0xx_hal.h"
-#include "stm32g0xx_hal_flash_ex.h"
+#include "stm32g0xx.h"
 
 /*
  * Architecture note:
@@ -16,12 +15,20 @@
  * 只有所有槽位写满后才擦除整页，从而减少 Flash 擦写次数。
  */
 #define NVM_PARAM_FLASH_SIZE_BYTES   (32U * 1024U)
-#define NVM_PARAM_FLASH_ADDR         (FLASH_BASE + NVM_PARAM_FLASH_SIZE_BYTES - FLASH_PAGE_SIZE)
+#define NVM_PARAM_FLASH_PAGE_BYTES   (2U * 1024U)
+#define NVM_PARAM_FLASH_ADDR         (FLASH_BASE + NVM_PARAM_FLASH_SIZE_BYTES - NVM_PARAM_FLASH_PAGE_BYTES)
 #define NVM_PARAM_MAGIC              (0x56504B54UL)
 #define NVM_PARAM_COMMIT_MAGIC       (0x54494D43UL)
 #define NVM_PARAM_VERSION            (4U)
 #define NVM_PARAM_CRC_INIT           (0xFFFFFFFFUL)
 #define NVM_PARAM_CRC_POLY           (0xEDB88320UL)
+#define NVM_FLASH_KEY1               (0x45670123UL)
+#define NVM_FLASH_KEY2               (0xCDEF89ABUL)
+#define NVM_FLASH_ERROR_MASK         (FLASH_SR_OPERR | FLASH_SR_PROGERR | \
+                                      FLASH_SR_WRPERR | FLASH_SR_PGAERR | \
+                                      FLASH_SR_SIZERR | FLASH_SR_PGSERR | \
+                                      FLASH_SR_MISERR | FLASH_SR_FASTERR | \
+                                      FLASH_SR_OPTVERR)
 
 typedef struct
 {
@@ -37,10 +44,10 @@ typedef struct
 enum
 {
     NVM_PARAM_SLOT_SIZE = (int)((sizeof(NvmParamRecord) + 7U) & ~7U),
-    NVM_PARAM_SLOT_COUNT = (int)(FLASH_PAGE_SIZE / ((sizeof(NvmParamRecord) + 7U) & ~7U))
+    NVM_PARAM_SLOT_COUNT = (int)(NVM_PARAM_FLASH_PAGE_BYTES / ((sizeof(NvmParamRecord) + 7U) & ~7U))
 };
 
-_Static_assert(sizeof(NvmParamRecord) <= FLASH_PAGE_SIZE, "NVM record is larger than one Flash page");
+_Static_assert(sizeof(NvmParamRecord) <= NVM_PARAM_FLASH_PAGE_BYTES, "NVM record is larger than one Flash page");
 _Static_assert(NVM_PARAM_SLOT_COUNT > 0, "NVM Flash page cannot hold one record");
 
 static uint32_t NvmParam_Crc32Update(uint32_t crc, const void *data, uint32_t size)
@@ -285,39 +292,73 @@ static bool NvmParam_FindLatest(const NvmParamRecord **latest, uint32_t *next_sl
     return best != NULL;
 }
 
+static bool NvmParam_FlashWaitReady(void)
+{
+    uint32_t timeout = 10000000UL;
+
+    while ((FLASH->SR & (FLASH_SR_BSY1 | FLASH_SR_CFGBSY)) != 0U)
+    {
+        if (timeout-- == 0U)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool NvmParam_FlashUnlock(void)
+{
+    if ((FLASH->CR & FLASH_CR_LOCK) != 0U)
+    {
+        FLASH->KEYR = NVM_FLASH_KEY1;
+        FLASH->KEYR = NVM_FLASH_KEY2;
+    }
+    return (FLASH->CR & FLASH_CR_LOCK) == 0U;
+}
+
+static void NvmParam_FlashLock(void)
+{
+    FLASH->CR |= FLASH_CR_LOCK;
+}
+
+static void NvmParam_FlashClearStatus(void)
+{
+    FLASH->SR = FLASH_SR_EOP | NVM_FLASH_ERROR_MASK;
+}
+
 static NvmParamStatus NvmParam_ErasePage(void)
 {
-    FLASH_EraseInitTypeDef erase = {0};
-    uint32_t page_error = 0;
-    HAL_StatusTypeDef status;
+    uint32_t page = (NVM_PARAM_FLASH_ADDR - FLASH_BASE) / NVM_PARAM_FLASH_PAGE_BYTES;
+    bool success;
 
-    erase.TypeErase = FLASH_TYPEERASE_PAGES;
-    erase.Banks = FLASH_BANK_1;
-    erase.Page = (NVM_PARAM_FLASH_ADDR - FLASH_BASE) / FLASH_PAGE_SIZE;
-    erase.NbPages = 1;
-
-    status = HAL_FLASH_Unlock();
-    if (status == HAL_OK)
+    if (!NvmParam_FlashWaitReady() || !NvmParam_FlashUnlock())
     {
-        status = HAL_FLASHEx_Erase(&erase, &page_error);
-        (void)HAL_FLASH_Lock();
+        return NVM_PARAM_FLASH_ERROR;
     }
+    NvmParam_FlashClearStatus();
+    FLASH->CR = (FLASH->CR & ~FLASH_CR_PNB)
+              | FLASH_CR_PER | (page << FLASH_CR_PNB_Pos);
+    FLASH->CR |= FLASH_CR_STRT;
+    success = NvmParam_FlashWaitReady()
+              && ((FLASH->SR & NVM_FLASH_ERROR_MASK) == 0U);
+    FLASH->CR &= ~(FLASH_CR_PER | FLASH_CR_PNB);
+    NvmParam_FlashClearStatus();
+    NvmParam_FlashLock();
 
-    return (status == HAL_OK) ? NVM_PARAM_OK : NVM_PARAM_FLASH_ERROR;
+    return success ? NVM_PARAM_OK : NVM_PARAM_FLASH_ERROR;
 }
 
 static NvmParamStatus NvmParam_WriteSlot(uint32_t slot_index, const NvmParamRecord *record)
 {
     uint8_t write_buf[NVM_PARAM_SLOT_SIZE];
-    HAL_StatusTypeDef status;
+    bool success = true;
 
     /* Flash programming is 64-bit aligned on STM32G0, so pad the slot with 0xFF. */
     /* STM32G0 按 64 位双字写 Flash，因此槽位尾部用 0xFF 补齐。 */
     memset(write_buf, 0xFF, sizeof(write_buf));
     memcpy(write_buf, record, sizeof(*record));
 
-    status = HAL_FLASH_Unlock();
-    if (status != HAL_OK)
+    if (!NvmParam_FlashWaitReady() || !NvmParam_FlashUnlock())
     {
         return NVM_PARAM_FLASH_ERROR;
     }
@@ -327,18 +368,27 @@ static NvmParamStatus NvmParam_WriteSlot(uint32_t slot_index, const NvmParamReco
         uint64_t double_word;
 
         memcpy(&double_word, &write_buf[offset], sizeof(double_word));
-        status = HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD,
-                                   NVM_PARAM_FLASH_ADDR + (slot_index * (uint32_t)NVM_PARAM_SLOT_SIZE) + offset,
-                                   double_word);
-        if (status != HAL_OK)
+        uint32_t address = NVM_PARAM_FLASH_ADDR
+                         + (slot_index * (uint32_t)NVM_PARAM_SLOT_SIZE) + offset;
+
+        NvmParam_FlashClearStatus();
+        FLASH->CR |= FLASH_CR_PG;
+        *(volatile uint32_t *)address = (uint32_t)double_word;
+        __ISB();
+        *(volatile uint32_t *)(address + 4U) = (uint32_t)(double_word >> 32U);
+        success = NvmParam_FlashWaitReady()
+                  && ((FLASH->SR & NVM_FLASH_ERROR_MASK) == 0U);
+        FLASH->CR &= ~FLASH_CR_PG;
+        if (!success)
         {
             break;
         }
     }
 
-    (void)HAL_FLASH_Lock();
+    NvmParam_FlashClearStatus();
+    NvmParam_FlashLock();
 
-    return (status == HAL_OK) ? NVM_PARAM_OK : NVM_PARAM_FLASH_ERROR;
+    return success ? NVM_PARAM_OK : NVM_PARAM_FLASH_ERROR;
 }
 
 NvmParamStatus NvmParam_Load(Param *param)

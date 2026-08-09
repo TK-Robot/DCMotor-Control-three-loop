@@ -25,7 +25,7 @@
  */
 typedef struct
 {
-    I2C_HandleTypeDef* iic;     ///< I2C bus handle. / I2C 总线句柄。
+    I2C_TypeDef *i2c;           ///< I2C peripheral instance. / I2C 外设实例。
     Param* param;               ///< Shared runtime parameters. / 共享运行参数。
     bool dma_busy;              ///< I2C DMA busy flag. / I2C DMA 忙标志。
     bool position_initialized;  ///< First corrected sample has been accepted. / 首个校正位置样本是否已建立。
@@ -37,7 +37,7 @@ typedef struct
  * @brief Initialize encoder handle and speed filters.
  * @brief 初始化编码器句柄和速度滤波器。
  */
-void MT6701_init(MT6701* MT,I2C_HandleTypeDef *hi2c1,Param* params);
+void MT6701_init(MT6701 *MT, I2C_TypeDef *i2c, Param *params);
 
 /**
  * @brief Read encoder angle and update multi-turn position.

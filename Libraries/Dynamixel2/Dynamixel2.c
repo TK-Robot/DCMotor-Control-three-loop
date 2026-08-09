@@ -11,8 +11,6 @@
 #include <stddef.h>
 #include <string.h>
 
-extern DMA_HandleTypeDef hdma_usart2_rx;
-
 static Dynamixel2Context *Dynamixel2_ReplyContext;
 extern uint32_t SystemCoreClock;
 
@@ -725,20 +723,30 @@ static uint8_t Dynamixel2_WriteTable(Dynamixel2Context *context, uint16_t addres
 
 static bool Dynamixel2_StartRx(Dynamixel2Context *context)
 {
-    if (context == NULL || context->huart == NULL || context->param == NULL)
+    if (context == NULL || context->uart != USART2 || context->param == NULL)
     {
         return false;
     }
     /* Param.RxBuf belongs to DMA until an idle/error callback snapshots it. */
     /* Param.RxBuf 在空闲或错误回调取得快照前由 DMA 独占。 */
     context->rx_active = false;
-    if (HAL_UARTEx_ReceiveToIdle_DMA(context->huart, context->param->RxBuf,
-                                     sizeof(context->param->RxBuf)) != HAL_OK)
-    {
-        Dynamixel2_RecordDiagnostic(context, DXL2_DIAG_UART_ERROR);
-        return false;
-    }
-    __HAL_DMA_DISABLE_IT(&hdma_usart2_rx, DMA_IT_HT);
+    LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_4);
+    LL_DMA_ClearFlag_GI4(DMA1);
+    LL_DMA_SetPeriphAddress(DMA1, LL_DMA_CHANNEL_4,
+                            LL_USART_DMA_GetRegAddr(context->uart,
+                                                    LL_USART_DMA_REG_DATA_RECEIVE));
+    LL_DMA_SetMemoryAddress(DMA1, LL_DMA_CHANNEL_4,
+                            (uint32_t)context->param->RxBuf);
+    LL_DMA_SetDataLength(DMA1, LL_DMA_CHANNEL_4,
+                         sizeof(context->param->RxBuf));
+    LL_DMA_EnableIT_TC(DMA1, LL_DMA_CHANNEL_4);
+    LL_DMA_EnableIT_TE(DMA1, LL_DMA_CHANNEL_4);
+    LL_USART_ClearFlag_IDLE(context->uart);
+    LL_USART_ClearFlag_ORE(context->uart);
+    LL_USART_EnableIT_IDLE(context->uart);
+    LL_USART_EnableIT_ERROR(context->uart);
+    LL_USART_EnableDMAReq_RX(context->uart);
+    LL_DMA_EnableChannel(DMA1, LL_DMA_CHANNEL_4);
     context->rx_active = true;
     return true;
 }
@@ -759,20 +767,26 @@ static void Dynamixel2_InitReplyTimer(void)
 static bool Dynamixel2_StartTx(Dynamixel2Context *context, uint8_t *data,
                                uint16_t length)
 {
-    if (context == NULL || data == NULL || length == 0U || context->huart == NULL)
+    if (context == NULL || data == NULL || length == 0U || context->uart != USART2)
     {
         return false;
     }
     /* DMA borrows the buffer until Dynamixel2_TxCpltCallback releases tx_busy. */
     /* DMA 借用该缓冲区，直到 Dynamixel2_TxCpltCallback 释放 tx_busy。 */
     context->tx_busy = true;
-    if (HAL_UART_Transmit_DMA(context->huart, data, length) != HAL_OK)
-    {
-        context->tx_busy = false;
-        if (context->tx_drop_count < UINT32_MAX) ++context->tx_drop_count;
-        Dynamixel2_RecordDiagnostic(context, DXL2_DIAG_TX_DROP);
-        return false;
-    }
+    LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_5);
+    LL_DMA_ClearFlag_GI5(DMA1);
+    LL_DMA_SetPeriphAddress(DMA1, LL_DMA_CHANNEL_5,
+                            LL_USART_DMA_GetRegAddr(context->uart,
+                                                    LL_USART_DMA_REG_DATA_TRANSMIT));
+    LL_DMA_SetMemoryAddress(DMA1, LL_DMA_CHANNEL_5, (uint32_t)data);
+    LL_DMA_SetDataLength(DMA1, LL_DMA_CHANNEL_5, length);
+    LL_DMA_EnableIT_TC(DMA1, LL_DMA_CHANNEL_5);
+    LL_DMA_EnableIT_TE(DMA1, LL_DMA_CHANNEL_5);
+    LL_USART_DisableIT_TC(context->uart);
+    LL_USART_ClearFlag_TC(context->uart);
+    LL_USART_EnableDMAReq_TX(context->uart);
+    LL_DMA_EnableChannel(DMA1, LL_DMA_CHANNEL_5);
     return true;
 }
 
@@ -1358,14 +1372,14 @@ static void Dynamixel2_ConsumeStream(Dynamixel2Context *context)
     }
 }
 
-void Dynamixel2_Init(Dynamixel2Context *context, UART_HandleTypeDef *huart, Param *param)
+void Dynamixel2_Init(Dynamixel2Context *context, USART_TypeDef *uart, Param *param)
 {
     if (context == NULL || param == NULL)
     {
         return;
     }
     memset(context, 0, sizeof(*context));
-    context->huart = huart;
+    context->uart = uart;
     context->param = param;
     Dynamixel2_ReplyContext = context;
     context->node_id = (param->NodeId >= 1U && param->NodeId <= 0xFCU)
@@ -1402,12 +1416,11 @@ void Dynamixel2_RecordUartError(Dynamixel2Context *context, uint32_t error_code)
     Dynamixel2_RecordDiagnostic(context, DXL2_DIAG_UART_ERROR);
 }
 
-void Dynamixel2_RxEventCallback(Dynamixel2Context *context,
-                                const UART_HandleTypeDef *huart, uint16_t size)
+void Dynamixel2_RxEventCallback(Dynamixel2Context *context, uint16_t size)
 {
     uint8_t received[sizeof(((Param *)0)->RxBuf)];
 
-    if (context == NULL || huart != context->huart || context->param == NULL)
+    if (context == NULL || context->uart != USART2 || context->param == NULL)
     {
         return;
     }
@@ -1432,10 +1445,9 @@ void Dynamixel2_RxEventCallback(Dynamixel2Context *context,
     Dynamixel2_ConsumeStream(context);
 }
 
-void Dynamixel2_TxCpltCallback(Dynamixel2Context *context,
-                               const UART_HandleTypeDef *huart)
+void Dynamixel2_TxCpltCallback(Dynamixel2Context *context)
 {
-    if (context != NULL && huart == context->huart)
+    if (context != NULL && context->uart == USART2)
     {
         context->tx_busy = false;
         if (context->node_id_change_after_tx)
@@ -1450,6 +1462,110 @@ void Dynamixel2_TxCpltCallback(Dynamixel2Context *context,
             context->baud_change_ready = true;
         }
         Dynamixel2_TrySendPending(context);
+    }
+}
+
+void Dynamixel2_UartIrqHandler(Dynamixel2Context *context)
+{
+    uint32_t errors;
+
+    if (context == NULL || context->uart != USART2)
+    {
+        return;
+    }
+
+    errors = context->uart->ISR & (USART_ISR_PE | USART_ISR_FE | USART_ISR_NE | USART_ISR_ORE);
+    if (errors != 0U)
+    {
+        LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_4);
+        LL_USART_DisableDMAReq_RX(context->uart);
+        context->uart->ICR = USART_ICR_PECF | USART_ICR_FECF
+                           | USART_ICR_NECF | USART_ICR_ORECF;
+        context->rx_active = false;
+        Dynamixel2_RecordUartError(context, errors);
+        (void)Dynamixel2_StartRx(context);
+    }
+
+    if (LL_USART_IsEnabledIT_IDLE(context->uart)
+        && LL_USART_IsActiveFlag_IDLE(context->uart))
+    {
+        uint16_t size;
+        LL_USART_ClearFlag_IDLE(context->uart);
+        LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_4);
+        LL_USART_DisableDMAReq_RX(context->uart);
+        size = (uint16_t)(sizeof(context->param->RxBuf)
+               - LL_DMA_GetDataLength(DMA1, LL_DMA_CHANNEL_4));
+        context->rx_active = false;
+        if (size != 0U)
+        {
+            Dynamixel2_RxEventCallback(context, size);
+        }
+        else
+        {
+            (void)Dynamixel2_StartRx(context);
+        }
+    }
+
+    if (LL_USART_IsEnabledIT_TC(context->uart)
+        && LL_USART_IsActiveFlag_TC(context->uart))
+    {
+        LL_USART_DisableIT_TC(context->uart);
+        LL_USART_ClearFlag_TC(context->uart);
+        Dynamixel2_TxCpltCallback(context);
+    }
+}
+
+void Dynamixel2_DmaIrqHandler(Dynamixel2Context *context)
+{
+    if (context == NULL || context->uart != USART2)
+    {
+        return;
+    }
+
+    if (LL_DMA_IsActiveFlag_TE4(DMA1))
+    {
+        LL_DMA_ClearFlag_GI4(DMA1);
+        LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_4);
+        LL_USART_DisableDMAReq_RX(context->uart);
+        context->rx_active = false;
+        Dynamixel2_RecordUartError(context, DMA_ISR_TEIF4);
+        (void)Dynamixel2_StartRx(context);
+    }
+    else if (LL_DMA_IsActiveFlag_TC4(DMA1))
+    {
+        LL_DMA_ClearFlag_GI4(DMA1);
+        LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_4);
+        LL_USART_DisableDMAReq_RX(context->uart);
+        context->rx_active = false;
+        Dynamixel2_RxEventCallback(context,
+                                   (uint16_t)sizeof(context->param->RxBuf));
+    }
+
+    if (LL_DMA_IsActiveFlag_TE5(DMA1))
+    {
+        LL_DMA_ClearFlag_GI5(DMA1);
+        LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_5);
+        LL_USART_DisableDMAReq_TX(context->uart);
+        context->tx_busy = false;
+        context->node_id_change_after_tx = false;
+        context->baud_change_after_tx = false;
+        Dynamixel2_RecordUartError(context, DMA_ISR_TEIF5);
+        Dynamixel2_TrySendPending(context);
+    }
+    else if (LL_DMA_IsActiveFlag_TC5(DMA1))
+    {
+        /* DMA completion only means TDR is fed; commit changes at UART TC. */
+        /* DMA 完成仅表示 TDR 已填充；节点配置必须等 UART TC 后提交。 */
+        LL_DMA_ClearFlag_GI5(DMA1);
+        LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_5);
+        LL_USART_DisableDMAReq_TX(context->uart);
+        LL_USART_EnableIT_TC(context->uart);
+        if (LL_USART_IsActiveFlag_TC(context->uart))
+        {
+            LL_USART_DisableIT_TC(context->uart);
+            LL_USART_ClearFlag_TC(context->uart);
+            Dynamixel2_TxCpltCallback(context);
+        }
     }
 }
 

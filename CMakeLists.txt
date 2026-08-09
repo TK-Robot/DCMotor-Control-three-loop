@@ -98,11 +98,10 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
 )
 
-# Firmware builds use link-time optimization to keep the protocol and control
-# stack inside the 30 KiB application region. Debug retains its DWARF symbols.
-# 固件构建使用链接时优化，确保协议与控制代码保持在 30 KiB 应用区内；
-# Debug 仍保留 DWARF 调试符号。
-if(CMAKE_BUILD_TYPE MATCHES "^(Debug|Release)$")
+# Release uses link-time optimization to minimize Flash usage. Debug keeps
+# normal object boundaries so breakpoints, locals, and stack frames are usable.
+# Release 使用链接时优化压缩 Flash；Debug 保留普通对象边界，确保断点、局部变量和调用栈可用。
+if(CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE -flto -fno-fat-lto-objects)
     target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -flto)
 endif()

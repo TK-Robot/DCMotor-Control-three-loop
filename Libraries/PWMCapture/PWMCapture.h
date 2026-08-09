@@ -28,7 +28,7 @@ typedef struct
     volatile uint16_t DutyRatio; ///< Captured low-level width in microseconds. / 捕获的低电平宽度，单位微秒。
     volatile uint16_t SignalAgeMs; ///< Time since the latest complete pulse. / 最近完整脉冲后的毫秒数。
     uint8_t EdgeNumber;          ///< Capture state machine step. / 捕获状态机步骤。
-    TIM_HandleTypeDef *htim;     ///< Timer input-capture handle. / 输入捕获定时器句柄。
+    TIM_TypeDef *timer;          ///< Timer input-capture instance. / 输入捕获定时器实例。
     volatile bool SignalValid;   ///< Pulse is in range and has not timed out. / 脉宽有效且尚未超时。
 } CaptureData;
 
@@ -36,13 +36,13 @@ typedef struct
  * @brief Start PWM input capture interrupt.
  * @brief 启动 PWM 输入捕获中断。
  */
-void PWMCapture_Init(CaptureData* Data,TIM_HandleTypeDef *htim);
+void PWMCapture_Init(CaptureData *Data, TIM_TypeDef *timer);
 
 /**
  * @brief Update capture state and return the latest measured value.
  * @brief 更新捕获状态并返回最新测量值。
  */
-uint16_t PWMCapture_Calculate(CaptureData* Data,TIM_HandleTypeDef *htim);
+uint16_t PWMCapture_Calculate(CaptureData *Data, TIM_TypeDef *timer);
 
 /**
  * @brief Age the captured signal by one millisecond and invalidate stale input.
