@@ -33,8 +33,6 @@ void MX_USART2_UART_Init(void)
 
   /* USER CODE END USART2_Init 0 */
 
-  LL_USART_InitTypeDef USART_InitStruct = {0};
-
   LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
 
   /* Peripheral clock enable */
@@ -104,15 +102,17 @@ void MX_USART2_UART_Init(void)
   /* USER CODE BEGIN USART2_Init 1 */
 
   /* USER CODE END USART2_Init 1 */
-  USART_InitStruct.PrescalerValue = LL_USART_PRESCALER_DIV1;
-  USART_InitStruct.BaudRate = 115200;
-  USART_InitStruct.DataWidth = LL_USART_DATAWIDTH_8B;
-  USART_InitStruct.StopBits = LL_USART_STOPBITS_1;
-  USART_InitStruct.Parity = LL_USART_PARITY_NONE;
-  USART_InitStruct.TransferDirection = LL_USART_DIRECTION_TX_RX;
-  USART_InitStruct.HardwareFlowControl = LL_USART_HWCONTROL_NONE;
-  USART_InitStruct.OverSampling = LL_USART_OVERSAMPLING_16;
-  LL_USART_Init(USART2, &USART_InitStruct);
+  /* The system clock has already been fixed at 64 MHz by SystemClock_Config.
+   * Configure the same 8-N-1 asynchronous mode directly, avoiding the generic
+   * LL initializer's runtime RCC clock-discovery code on this 30 KiB target. */
+  LL_USART_SetPrescaler(USART2, LL_USART_PRESCALER_DIV1);
+  LL_USART_SetTransferDirection(USART2, LL_USART_DIRECTION_TX_RX);
+  LL_USART_ConfigCharacter(USART2, LL_USART_DATAWIDTH_8B,
+                           LL_USART_PARITY_NONE, LL_USART_STOPBITS_1);
+  LL_USART_SetHWFlowCtrl(USART2, LL_USART_HWCONTROL_NONE);
+  LL_USART_SetOverSampling(USART2, LL_USART_OVERSAMPLING_16);
+  LL_USART_SetBaudRate(USART2, SystemCoreClock, LL_USART_PRESCALER_DIV1,
+                       LL_USART_OVERSAMPLING_16, 115200U);
   LL_USART_ConfigAsyncMode(USART2);
 
   /* USER CODE BEGIN WKUPType USART2 */

@@ -8,24 +8,24 @@ The UART servo bus protocol documentation is split into modules under [docs/tsbp
 
 ## 项目简介 / Overview
 
-这是一个基于 STM32G030 的超小体积直流电机伺服控制项目，面向电流环、速度环和位置环的级联三环控制。项目包含 MT6701 磁编码器反馈、AD116 电机驱动 PWM 输出、INA181 电流采样、电源电压/温度监测、UART 遥测、PWM 输入捕获、掉电参数保存和 PC 端控制逻辑仿真。
+这是一个基于 STM32G030 的超小体积有刷直流电机伺服项目。受 DRV8837 公共低侧单向电流采样限制，系统采用位置 P、速度 PI、R/Ke 电压前馈、硬件时间平均电流修正和同步保护，而不是伪造四象限绕组电流反馈。项目包含 MT6701 磁编码器反馈、PWM 输出、INA181 电流采样、电源电压/温度监测、DYNAMIXEL/CRSF/PWM 输入、掉电参数保存和 PC 端控制逻辑仿真。
 
-This is a compact STM32G030-based DC motor servo control project implementing cascaded current, speed, and position loops. It includes MT6701 magnetic encoder feedback, AD116 motor-driver PWM output, INA181 current sampling, power-voltage/temperature monitoring, UART telemetry, PWM input capture, non-volatile parameter storage, and PC-side control simulation.
+This compact STM32G030 brushed-DC servo uses position P, velocity PI, R/Ke voltage feed-forward, observable-region current PI trim, and synchronous peak-current protection. The DRV8837 common low-side unidirectional shunt cannot support a true four-quadrant average-current loop.
 
 ## 最新更新 / Recent Updates
 
 - 新增三种伺服控制模式：电流模式、速度模式、位置模式。  
   Added three servo control modes: current, speed, and position.
-- 新增 `ServoControl` 调度层，实现 1 ms / 5 ms / 10 ms / 20 ms 合作式多速率调度。  
-  Added the `ServoControl` scheduler with cooperative 1 ms / 5 ms / 10 ms / 20 ms multi-rate timing.
-- PID 拆分为位置环、速度环、电流环接口，并增加 `PID_Reset()`。  
-  Split PID control into position, speed, and current loop APIs, with `PID_Reset()`.
+- 新增 `ServoControl` 调度层，实现 1 kHz 速度观测/PI、200 Hz 位置环和 50 Hz 遥测。
+  Added 1 kHz velocity observation/PI, a 200 Hz position loop, and 50 Hz telemetry.
+- 目标电流通过 `R·I + Ke·ω` 模型转换为 PWM 前馈；PA0 恢复 16 次硬件过采样，在约 26 µs 窗口内平均窄 PWM 脉冲与 INA181 响应，再经低通供 1 kHz PI 修正。未实测的电感参数不参与 PWM 限幅；单向分流无法观测制动/续流回路，因此反馈明确表示桥侧时间平均值，不冒充四象限绕组电流。
+  Model current becomes PWM feed-forward through `R·I + Ke·ω`; synchronized active-window samples plus R/L decay reconstruct cycle-average winding current for the 1 kHz PI, with separate peak chopping and absolute overcurrent latching.
 - 新增掉电保存模块 `NvmParam`，使用 Flash 尾页保存配置参数。  
   Added `NvmParam` to store configuration data in the reserved last Flash page.
 - 新增 `Sim` 目录，提供 PC 端逻辑仿真和单元测试源码。  
   Added the `Sim` directory for PC-side logic simulation and unit-test sources.
-- Release 固件体积当前约 22 KB，仍低于 30 KB 程序区限制。  
-  The current Release firmware is about 22 KB, below the 30 KB application Flash region.
+- Release 默认启用 `-Oz`、LTO 和纯 C 最小启动；当前固件为 30,648 B，低于 30 KiB 程序区限制。
+  Release enables `-Oz`, LTO, and a minimal pure-C startup; the current firmware is 30,648 B and fits the 30 KiB application region.
 
 ## 运动控制架构 / Motion Control Architecture
 
@@ -34,8 +34,8 @@ This is a compact STM32G030-based DC motor servo control project implementing ca
 The system uses a common industrial-servo cascaded control structure:
 
 ```text
-Position Loop -> Speed Loop -> Current Loop -> PWM Driver -> Motor
-位置环        -> 速度环     -> 电流环      -> PWM 驱动   -> 电机
+Position P -> Velocity PI -> Current Ref -> Model FF + Current PI -> PWM -> Motor
+位置 P     -> 速度 PI     -> 电流目标    -> 模型前馈 + 电流PI     -> PWM -> 电机
 ```
 
 三种控制模式按启用的外环数量区分：
@@ -43,32 +43,32 @@ Position Loop -> Speed Loop -> Current Loop -> PWM Driver -> Motor
 The three control modes differ by how many outer loops are enabled:
 
 ```text
-Current Mode:
-target_current -> Current Loop -> PWM
-电流模式：
-目标电流       -> 电流环       -> PWM
+Hybrid Current Mode:
+target_current -> R/Ke Voltage FF + observable current PI -> PWM
+混合电流模式：
+目标电流       -> R/Ke 电压前馈 + 可观测区电流PI          -> PWM
 
 Speed Mode:
-target_speed -> Speed Loop -> target_current -> Current Loop -> PWM
+target_speed -> Velocity PI -> target_current -> Model FF + Current PI -> PWM
 速度模式：
-目标速度     -> 速度环    -> 目标电流       -> 电流环       -> PWM
+目标速度     -> 速度 PI  -> 目标电流       -> 模型前馈 + 电流PI -> PWM
 
 Position Mode:
-target_position -> Position Loop -> target_speed -> Speed Loop -> target_current -> Current Loop -> PWM
+target_position -> Position P -> target_speed -> Velocity PI -> target_current -> Model FF + Current PI -> PWM
 位置模式：
-目标位置        -> 位置环       -> 目标速度     -> 速度环    -> 目标电流       -> 电流环       -> PWM
+目标位置        -> 位置 P      -> 目标速度     -> 速度 PI  -> 目标电流       -> 模型前馈 + 电流PI -> PWM
 ```
 
 控制调度由 `ServoControl` 完成：
 
 Control scheduling is handled by `ServoControl`:
 
-- 1 ms：ADC 状态分析、保护判断、电流环、PWM 输出。  
-  1 ms: ADC status analysis, protection checks, current loop, and PWM output.
-- 5 ms：读取 MT6701，更新速度反馈，运行速度环。  
-  5 ms: read MT6701, update speed feedback, and run the speed loop.
-- 10 ms：位置模式下运行位置环。  
-  10 ms: run the position loop in position mode.
+- PWM 周期：同步 ADC 幅值采样、硬峰值保护和 PWM 更新。
+  PWM cycle: synchronous magnitude sampling, hard peak protection, and PWM update.
+- 1 ms：读取 MT6701，运行速度观测器、速度 PI 和保护调度。
+  1 ms: update MT6701, velocity observer, velocity PI, and protection scheduling.
+- 5 ms：位置模式下运行位置 P 环。
+  5 ms: run the position P loop in position mode.
 - 20 ms：发送 UART 遥测数据。  
   20 ms: send UART telemetry.
 
@@ -144,9 +144,9 @@ cmake --build --preset Release
 arm-none-eabi-size build\Release\Triple-CascadeControlDCMotor.elf
 ```
 
-当前 Release 目标控制在 22 KiB 左右，适合 STM32G030 的小 Flash 空间。
+当前 Release 默认启用 `-Oz` 和 LTO，实测占用 30,648 B（30 KiB 程序区的 99.77%）。
 
-The current Release target is kept around 22 KiB, suitable for the small Flash size of STM32G030.
+Release enables `-Oz` and LTO by default and currently uses 30,648 B (99.77% of the 30 KiB application region).
 
 ## 仿真与测试 / Simulation and Tests
 

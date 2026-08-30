@@ -24,6 +24,9 @@
 /* USER CODE BEGIN Includes */
 #include "Dynamixel2.h"
 #include "PWMCapture/PWMCapture.h"
+#include "CurrentControl.h"
+#include "VoltageStatus.h"
+#include "AD116.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -62,6 +65,9 @@
 extern Dynamixel2Context DynamixelBus;
 extern CaptureData PWMCaptureData;
 extern Param Param_KX;
+extern CurrentControl CurrentLoop;
+extern VoltageStatus Voltage;
+extern AD116 Drive;
 
 /* USER CODE END EV */
 
@@ -154,7 +160,12 @@ void DMA1_Channel1_IRQHandler(void)
 
   /* USER CODE END DMA1_Channel1_IRQn 0 */
   /* USER CODE BEGIN DMA1_Channel1_IRQn 1 */
-
+  if (LL_DMA_IsEnabledIT_TC(DMA1, LL_DMA_CHANNEL_1) &&
+      LL_DMA_IsActiveFlag_TC1(DMA1))
+  {
+    LL_DMA_ClearFlag_TC1(DMA1);
+    VoltageStatus_DmaIrqHandler(&Voltage, &CurrentLoop, &Drive);
+  }
   /* USER CODE END DMA1_Channel1_IRQn 1 */
 }
 

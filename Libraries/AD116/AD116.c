@@ -5,6 +5,7 @@
  */
 
 #include "AD116.h"
+#include "CurrentSenseModel.h"
 
 #include <stdlib.h>
 
@@ -33,7 +34,9 @@ void AD116_init(AD116 *ad116, TIM_TypeDef *timer, const uint32_t channel1,
     /* CH4 只在 PWM 中点产生 ADC 触发，不输出到 GPIO。 */
     LL_TIM_EnableARRPreload(timer);
     LL_TIM_OC_SetMode(timer, LL_TIM_CHANNEL_CH4, LL_TIM_OCMODE_PWM2);
-    LL_TIM_OC_SetCompareCH4(timer, (LL_TIM_GetAutoReload(timer) + 1U) / 2U);
+    LL_TIM_OC_SetCompareCH4(timer,
+        CurrentSenseModel_TriggerCompare((uint16_t)LL_TIM_GetAutoReload(timer),
+                                         0, 0U));
     LL_TIM_OC_EnablePreload(timer, LL_TIM_CHANNEL_CH4);
     LL_TIM_SetTriggerOutput(timer, LL_TIM_TRGO_OC4REF);
     LL_TIM_CC_EnableChannel(timer, channel1 | channel2 | LL_TIM_CHANNEL_CH4);
@@ -46,8 +49,11 @@ void AD116_setTimerFrequency(const AD116* ad116, const uint32_t psc, const uint3
     LL_TIM_SetPrescaler(ad116->timer, psc);
     LL_TIM_SetAutoReload(ad116->timer, arr);
     LL_TIM_SetCounter(ad116->timer, 0U);
+    LL_TIM_OC_SetCompareCH4(ad116->timer,
+        CurrentSenseModel_TriggerCompare((uint16_t)arr,
+                                         ad116->param->DrivePower,
+                                         ad116->param->DriveRunMode));
     LL_TIM_GenerateEvent_UPDATE(ad116->timer);
-    LL_TIM_OC_SetCompareCH4(ad116->timer, (arr + 1U) / 2U);
     LL_TIM_CC_EnableChannel(ad116->timer,
                            ad116->channel1 | ad116->channel2
                            | LL_TIM_CHANNEL_CH4);
@@ -57,14 +63,32 @@ void AD116_setTimerFrequency(const AD116* ad116, const uint32_t psc, const uint3
 void AD116_Update(AD116* ad116, Param *param)
 {
     (void)param;
+    AD116_ApplyPwm(ad116, ad116->param->DrivePower,
+                   ad116->param->DriveRunMode);
+}
+
+void AD116_ApplyPwm(AD116 *ad116, int16_t power_permille,
+                    uint8_t drive_mode)
+{
+    uint32_t period_ticks = LL_TIM_GetAutoReload(ad116->timer) + 1U;
+    uint32_t duty_ticks;
+
+    ad116->param->DrivePower = power_permille;
+    ad116->param->DriveRunMode = drive_mode;
 
     /* Clamp command before mapping it to timer compare values. */
     /* 先限制输出指令，再映射到定时器比较值。 */
     if (ad116->param->DrivePower > 1000) ad116->param->DrivePower = 1000;
     if (ad116->param->DrivePower < -1000) ad116->param->DrivePower = -1000;
-    if (ad116->param->DrivePower>=0 && ad116->param->DrivePower < PowerMin)ad116->param->DrivePower = 0;
-    if (ad116->param->DrivePower<=0 && ad116->param->DrivePower > -PowerMin)ad116->param->DrivePower = 0;
+    if (drive_mode != 1U)
+    {
+        if (ad116->param->DrivePower>=0 && ad116->param->DrivePower < PowerMin)ad116->param->DrivePower = 0;
+        if (ad116->param->DrivePower<=0 && ad116->param->DrivePower > -PowerMin)ad116->param->DrivePower = 0;
+    }
 
+    duty_ticks = CurrentSenseModel_DutyTicks(
+        (uint16_t)LL_TIM_GetAutoReload(ad116->timer),
+        ad116->param->DrivePower);
     if (ad116->param->DriveRunMode == 0)
     {
         /* Coast mode: both outputs disabled. */
@@ -74,46 +98,46 @@ void AD116_Update(AD116* ad116, Param *param)
     }
     else if (ad116->param->DriveRunMode == 1)
     {
-        /* Brake mode: both outputs driven high. */
-        /* 刹车模式：两个输出拉高。 */
-        AD116_SetCompare(ad116->timer, ad116->channel1, ad116->timer->ARR);
-        AD116_SetCompare(ad116->timer, ad116->channel2, ad116->timer->ARR);
+        /* Equal in-phase PWM alternates brake (high/high) and coast (low/low).
+         * A zero command retains the fail-safe full-brake convention. */
+        uint32_t brake_ticks = ad116->param->DrivePower == 0
+                                 ? period_ticks : duty_ticks;
+        AD116_SetCompare(ad116->timer, ad116->channel1, brake_ticks);
+        AD116_SetCompare(ad116->timer, ad116->channel2, brake_ticks);
     }
     else if (ad116->param->DriveRunMode == 2)
     {
         /* Slow-decay mode: direction selects which side is PWM-modulated. */
         /* 慢衰减模式：方向决定哪一路使用 PWM 调制。 */
-        uint16_t DutyRatio = MAP(abs(ad116->param->DrivePower), 0, 1000, 0, ad116->timer->ARR);
+        uint32_t compare = period_ticks - duty_ticks;
         if (ad116->param->DrivePower>0) ad116->param->DriveVeerFlag =true;
         if (ad116->param->DrivePower<0) ad116->param->DriveVeerFlag =false;
-        DutyRatio = ad116->timer->ARR - DutyRatio;
         if (ad116->param->DriveVeerFlag == false)
         {
-            AD116_SetCompare(ad116->timer, ad116->channel1, ad116->timer->ARR);
-            AD116_SetCompare(ad116->timer, ad116->channel2, DutyRatio);
+            AD116_SetCompare(ad116->timer, ad116->channel1, period_ticks);
+            AD116_SetCompare(ad116->timer, ad116->channel2, compare);
         }
         else if (ad116->param->DriveVeerFlag == true)
         {
-            AD116_SetCompare(ad116->timer, ad116->channel1, DutyRatio);
-            AD116_SetCompare(ad116->timer, ad116->channel2, ad116->timer->ARR);
+            AD116_SetCompare(ad116->timer, ad116->channel1, compare);
+            AD116_SetCompare(ad116->timer, ad116->channel2, period_ticks);
         }
     }
     else if (ad116->param->DriveRunMode == 3)
     {
         /* Fast-decay mode: one output PWM, the other output off. */
         /* 快衰减模式：一路 PWM，另一路关闭。 */
-        uint16_t DutyRatio = MAP(abs(ad116->param->DrivePower), 0, 1000, 0, ad116->timer->ARR);
         if (ad116->param->DrivePower>0) ad116->param->DriveVeerFlag =true;
         if (ad116->param->DrivePower<0) ad116->param->DriveVeerFlag =false;
         if (ad116->param->DriveVeerFlag == false)
         {
-            AD116_SetCompare(ad116->timer, ad116->channel1, DutyRatio);
+            AD116_SetCompare(ad116->timer, ad116->channel1, duty_ticks);
             AD116_SetCompare(ad116->timer, ad116->channel2, 0U);
         }
         else if (ad116->param->DriveVeerFlag == true)
         {
             AD116_SetCompare(ad116->timer, ad116->channel1, 0U);
-            AD116_SetCompare(ad116->timer, ad116->channel2, DutyRatio);
+            AD116_SetCompare(ad116->timer, ad116->channel2, duty_ticks);
         }
     }
 }
@@ -127,8 +151,8 @@ void CycleStart(AD116 *ad116, TIM_TypeDef *timer)
 
 void CycleBlockingTimer(AD116 *ad116, TIM_TypeDef *timer)
 {
-    ad116->param->ProcessTimeUs = LL_TIM_GetCounter(timer);
     uint32_t target = ad116->param->CycleTimeMs * 1000;
     while (target > LL_TIM_GetCounter(timer)) {}
+    ad116->param->ProcessTimeUs = LL_TIM_GetCounter(timer);
     LL_TIM_DisableCounter(timer);
 }

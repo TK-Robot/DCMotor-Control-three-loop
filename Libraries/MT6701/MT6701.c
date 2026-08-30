@@ -84,9 +84,12 @@ void MT6701_init(MT6701 *MT, I2C_TypeDef *i2c, Param *params)
 {
     MT->i2c = i2c;
     MT->param=params;
+    MT->dma_busy = false;
     MT->position_initialized = false;
+    MT->param->EncoderFeedbackValid = false;
+    MT->param->EncoderSampleAgeMs = UINT16_MAX;
     MT6701_Update(MT);
-    LPF_Filter_Init(&MT->SpeedFilter,32);
+    VelocityObserver_Init(&MT->Velocity);
     LPF_Filter_Init(&MT->AccDecSpeedFilter,8);
 }
 
@@ -125,9 +128,13 @@ void MT6701_Update(MT6701* MT)
     if (!MT6701_ReadAngle(MT->i2c, MT->param->EncoderReadData))
     {
         MT->dma_busy = true;
+        if (MT->param->EncoderSampleAgeMs != UINT16_MAX)
+            MT->param->EncoderSampleAgeMs++;
         return;
     }
     MT->dma_busy = false;
+    MT->param->EncoderFeedbackValid = true;
+    MT->param->EncoderSampleAgeMs = 0U;
     MT6701_CodedManage(MT);
 
     if (MT->param->EncoderRebaseline)
@@ -189,31 +196,31 @@ void MT6701_CodedManage(MT6701* MT)
     MT->param->EncoderValue = (uint16_t)val;
 }
 
-void MT6701_SpeedUpdate(MT6701* MT, uint32_t sample_period_ms)
+void MT6701_SpeedUpdate(MT6701* MT, uint32_t sample_period_us)
 {
-    int32_t diff = (int32_t)MT->param->EncoderValue
-                 - (int32_t)MT->param->LastEncoderValue;
+    int32_t previous_speed;
+    uint32_t acceleration_period_ms;
 
-    if (sample_period_ms == 0U)
+    if (MT->dma_busy) return;
+
+    if (sample_period_us == 0U)
     {
-        sample_period_ms = (MT->param->CycleTimeMs == 0U) ? 1U : MT->param->CycleTimeMs;
+        sample_period_us = (uint32_t)((MT->param->CycleTimeMs == 0U)
+                           ? 1U : MT->param->CycleTimeMs) * 1000U;
     }
+    if (sample_period_us > UINT16_MAX) sample_period_us = UINT16_MAX;
 
-    /* Correct speed delta when the encoder crosses the zero point. */
-    /* 编码器跨零时修正速度差值。 */
-    if (diff >  8192) diff -= 16384;
-    if (diff < -8192) diff += 16384;
-
-    /* Use the actual encoder refresh period, not the 1 ms base scheduler period. */
-    /* 使用编码器实际刷新周期，而不是 1 ms 基础调度周期。 */
-    MT->param->EncoderSpeed =(diff * 1000 / (int32_t)sample_period_ms);
-    MT->param->EncoderSpeed=LPF_Filter_Update(&MT->SpeedFilter,MT->param->EncoderSpeed);
-
-    MT->param->AccDec=(MT->param->EncoderSpeed-MT->param->LastEncoderSpeed)
-                    * (1000 / (int32_t)sample_period_ms);
+    previous_speed = MT->param->EncoderSpeed;
+    MT->param->EncoderSpeed = VelocityObserver_Update(
+        &MT->Velocity, MT->param->EncoderMultiTurnValue,
+        (uint16_t)sample_period_us);
+    acceleration_period_ms = (sample_period_us + 500U) / 1000U;
+    if (acceleration_period_ms == 0U) acceleration_period_ms = 1U;
+    MT->param->AccDec=(MT->param->EncoderSpeed-previous_speed)
+                    * (1000 / (int32_t)acceleration_period_ms);
     MT->param->AccDec=LPF_Filter_Update(&MT->AccDecSpeedFilter,MT->param->AccDec);
 
-    MT->param->LastEncoderSpeed=MT->param->EncoderSpeed;
+    MT->param->LastEncoderSpeed=previous_speed;
 
     MT->param->LastEncoderMultiTurnValue=MT->param->EncoderMultiTurnValue;
     MT->param->LastEncoderValue = MT->param->EncoderValue;

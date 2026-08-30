@@ -12,7 +12,7 @@
 #include "tim.h"
 #include "TypeDefine.h"
 
-#define PowerMin 10 ///< Minimum command before output is forced to zero. / 小于该输出时强制归零。
+#define PowerMin 1 ///< Timer resolution is the only low-duty clamp. / 仅按定时器分辨率限制低占空比。
 
 /**
  * @brief Runtime handle for two-channel PWM motor drive.
@@ -44,6 +44,13 @@ void AD116_setTimerFrequency(const AD116* ad116, uint32_t psc, uint32_t arr);
  * @brief 根据 DriveRunMode 和 DrivePower 更新 PWM 输出。
  */
 void AD116_Update(AD116* ad116, Param* param);
+
+/**
+ * @brief Apply one model-voltage PWM actuator output.
+ * @brief 应用一次模型电压 PWM 执行器输出。
+ */
+void AD116_ApplyPwm(AD116 *ad116, int16_t power_permille,
+                    uint8_t drive_mode);
 
 /**
  * @brief Start loop timing measurement.

@@ -10,6 +10,8 @@
 #include <stdbool.h>
 
 #include "adc.h"
+#include "AD116.h"
+#include "CurrentControl.h"
 #include "TypeDefine.h"
 #include "Filter.h"
 
@@ -39,6 +41,20 @@ typedef struct
     ADC_TypeDef *adc;        ///< ADC peripheral instance. / ADC 外设实例。
     Param* param;            ///< Shared runtime parameters. / 共享运行参数。
     LPF_Filter SampMaFilter; ///< Current measurement low-pass filter. / 电流测量低通滤波器。
+    uint16_t current_offset_adc; ///< Zero-current ADC offset. / 零电流 ADC 偏置。
+    uint8_t sample_drive_mode; ///< Bridge mode that produced the filtered sample. / 产生滤波样本的桥模式。
+    int8_t sample_drive_sign; ///< Drive direction that produced the filtered sample. / 产生滤波样本的驱动方向。
+    bool sample_valid;       ///< Previous active-window sample state. / 上次有效导通区采样状态。
+    bool sample_filter_initialized; ///< Filter context survives brief PDM/coast gaps. / 滤波上下文跨越短暂 PDM/滑行间隔。
+    /* Rolling statistics window (folded into Param every 20 ms). */
+    /* 滚动统计窗口，每 20 ms 折叠进 Param 供诊断上传。 */
+    int32_t window_sum_mA;
+    uint16_t window_valid;
+    uint16_t window_invalid;
+    int16_t window_min_mA;
+    int16_t window_max_mA;
+    uint16_t window_tick_ms;
+    bool last_hard_limit;
 } VoltageStatus;
 
 /**
@@ -70,6 +86,10 @@ bool VoltageStatus_IsPowerLow(const VoltageStatus* VoltageStatus);
  * @brief 分析 DMA ADC 采样并更新 Param 中的测量值。
  */
 void VoltageStatus_AnalyzeData(VoltageStatus* VoltageStatus);
+
+void VoltageStatus_DmaIrqHandler(VoltageStatus *status,
+                                 CurrentControl *current_control,
+                                 AD116 *drive);
 
 /**
  * @brief Derive logical signed current from measured magnitude and drive direction.

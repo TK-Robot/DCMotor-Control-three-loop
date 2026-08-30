@@ -34,10 +34,18 @@ enable_language(C ASM)
 add_executable(${CMAKE_PROJECT_NAME}
         Libraries/MT6701/MT6701.c
         Libraries/MT6701/MT6701.h
+        Libraries/VelocityObserver/VelocityObserver.c
+        Libraries/VelocityObserver/VelocityObserver.h
         Libraries/AD116/AD116.c
         Libraries/AD116/AD116.h
         Libraries/VoltageStatus/VoltageStatus.c
         Libraries/VoltageStatus/VoltageStatus.h
+        Libraries/CurrentSenseModel/CurrentSenseModel.c
+        Libraries/CurrentSenseModel/CurrentSenseModel.h
+        Libraries/CurrentControl/CurrentControl.c
+        Libraries/CurrentControl/CurrentControl.h
+        Libraries/FixedPointMath/FixedPointMath.c
+        Libraries/FixedPointMath/FixedPointMath.h
         Libraries/TypeDefine.h
         Libraries/PID/PID.h
         Libraries/PID/PID.c
@@ -50,10 +58,16 @@ add_executable(${CMAKE_PROJECT_NAME}
         Libraries/NvmParam/NvmParam.h
         Libraries/ServoControl/ServoControl.c
         Libraries/ServoControl/ServoControl.h
+        Libraries/MotorTorqueModel/MotorTorqueModel.c
+        Libraries/MotorTorqueModel/MotorTorqueModel.h
+        Libraries/MechanicalModel/MechanicalModel.c
+        Libraries/MechanicalModel/MechanicalModel.h
         Libraries/Dynamixel2/Dynamixel2Codec.c
         Libraries/Dynamixel2/Dynamixel2Codec.h
         Libraries/Dynamixel2/Dynamixel2.c
         Libraries/Dynamixel2/Dynamixel2.h
+        Libraries/Crsf/Crsf.c
+        Libraries/Crsf/Crsf.h
 )
 
 # Add STM32CubeMX generated sources
@@ -73,15 +87,22 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     # Add user defined include paths
         Libraries/MT6701
+        Libraries/VelocityObserver
         Libraries/AD116
         Libraries/VoltageStatus
+        Libraries/CurrentSenseModel
+        Libraries/CurrentControl
+        Libraries/FixedPointMath
         Libraries
         Libraries/PID
         Libraries/Filter
         Libraries/PWMCapture
         Libraries/NvmParam
         Libraries/ServoControl
+        Libraries/MotorTorqueModel
+        Libraries/MechanicalModel
         Libraries/Dynamixel2
+        Libraries/Crsf
 )
 
 # Add project symbols (macros)
@@ -98,12 +119,13 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     # Add user defined libraries
 )
 
-# Release uses link-time optimization to minimize Flash usage. Debug keeps
-# normal object boundaries so breakpoints, locals, and stack frames are usable.
-# Release 使用链接时优化压缩 Flash；Debug 保留普通对象边界，确保断点、局部变量和调用栈可用。
-if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE -flto -fno-fat-lto-objects)
-    target_link_options(${CMAKE_PROJECT_NAME} PRIVATE -flto)
+# Release LTO is configured toolchain-wide so the application and STM32 driver
+# library are optimized together. Debug keeps normal object boundaries and
+# symbols, but uses size optimization because the MCU exposes only 30 KiB Flash.
+# Release 的 LTO 在工具链中统一配置，使应用与 STM32 驱动库共同优化；Debug 保留
+# 普通对象边界和调试符号，但受限于 30 KiB Flash，使用体积优化。
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    target_compile_options(${CMAKE_PROJECT_NAME} PRIVATE -Os)
 endif()
 
 # STM32G030 uses a Cortex-M0+ core without hardware FPU.

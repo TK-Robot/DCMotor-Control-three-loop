@@ -27,8 +27,9 @@ static void default_param(Param *param)
     param->CycleTimeMs = 1;
     param->TempLimit = 80;
     param->SpeedMax = 30000;
-    param->AccelMax = 60000;
-    param->DecelMax = 60000;
+    param->PositionDeadbandCounts = PID_POSITION_DEADBAND_DEFAULT_COUNTS;
+    param->AccelMax = 60U;
+    param->DecelMax = 60U;
     param->PowerSaveVoltage_mV = 4000;
     param->VCC_mV = 12000;
 }

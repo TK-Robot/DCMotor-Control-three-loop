@@ -21,7 +21,11 @@ extern "C" {
 
 #define DXL2_RX_STREAM_SIZE      256U   /**< Reassembly buffer across DMA idle events. / 跨 DMA 空闲事件的重组缓冲区。 */
 #define DXL2_MODEL_NUMBER        0x0001U /**< TK Servo model number returned by Ping. / Ping 返回的 TK Servo 型号。 */
-#define DXL2_FIRMWARE_VERSION    0x01U   /**< One-byte firmware revision. / 单字节固件版本。 */
+#define DXL2_FIRMWARE_VERSION    0x0DU   /**< One-byte firmware revision. / 单字节固件版本。 */
+
+/** Observe copied RX bytes without taking ownership of the UART transport. / 观察已复制的接收字节，但不取得 UART 传输所有权。 */
+typedef void (*Dynamixel2RxObserver)(void *user, const uint8_t *data,
+                                     uint16_t length);
 
 typedef struct
 {
@@ -48,6 +52,8 @@ typedef struct
 {
     USART_TypeDef *uart;             /**< Non-owning USART instance. / 非持有的 USART 外设实例。 */
     Param *param;                    /**< Shared live parameter/state owner. / 共享运行参数与状态所有者。 */
+    Dynamixel2RxObserver rx_observer; /**< Optional shared-UART protocol observer. / 可选的共享 UART 协议观察者。 */
+    void *rx_observer_user;          /**< Observer-owned context. / 观察者持有的上下文。 */
     ServoCommand pending_command;   /**< Validated command awaiting its apply tick. / 已校验、等待生效时刻的命令。 */
     ServoCommand active_command;    /**< Command consumed by ServoControl. / ServoControl 当前使用的命令。 */
     uint32_t tick_ms;                /**< Monotonic 1 ms protocol time base. / 单调递增的 1 ms 协议时基。 */
@@ -104,6 +110,10 @@ typedef struct
  * @param param Shared live parameter/state object. / 共享运行参数与状态对象。
  */
 void Dynamixel2_Init(Dynamixel2Context *context, USART_TypeDef *uart, Param *param);
+
+/** Register a bounded observer called once per copied DMA RX chunk. / 注册每个已复制 DMA 接收分段调用一次的有界观察者。 */
+void Dynamixel2_SetRxObserver(Dynamixel2Context *context,
+                              Dynamixel2RxObserver observer, void *user);
 
 /**
  * @brief Re-arm receive-to-idle DMA after an error. / 发生错误后重新启动空闲 DMA 接收。

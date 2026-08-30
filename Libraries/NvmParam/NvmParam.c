@@ -1,7 +1,9 @@
 #include "NvmParam.h"
 
+#include <stddef.h>
 #include <string.h>
 
+#include "PID.h"
 #include "stm32g0xx.h"
 
 /*
@@ -19,7 +21,9 @@
 #define NVM_PARAM_FLASH_ADDR         (FLASH_BASE + NVM_PARAM_FLASH_SIZE_BYTES - NVM_PARAM_FLASH_PAGE_BYTES)
 #define NVM_PARAM_MAGIC              (0x56504B54UL)
 #define NVM_PARAM_COMMIT_MAGIC       (0x54494D43UL)
-#define NVM_PARAM_VERSION            (4U)
+#define NVM_PARAM_LOW_SPEED_MARKER8  (0x4CU)
+#define NVM_PARAM_LOW_SPEED_MARKER16 (0x5343U)
+#define NVM_PARAM_VERSION            (7U)
 #define NVM_PARAM_CRC_INIT           (0xFFFFFFFFUL)
 #define NVM_PARAM_CRC_POLY           (0xEDB88320UL)
 #define NVM_FLASH_KEY1               (0x45670123UL)
@@ -49,6 +53,8 @@ enum
 
 _Static_assert(sizeof(NvmParamRecord) <= NVM_PARAM_FLASH_PAGE_BYTES, "NVM record is larger than one Flash page");
 _Static_assert(NVM_PARAM_SLOT_COUNT > 0, "NVM Flash page cannot hold one record");
+_Static_assert(sizeof(Param_SaveData) == 220U,
+               "v7 parameter payload layout changed without a version bump");
 
 static uint32_t NvmParam_Crc32Update(uint32_t crc, const void *data, uint32_t size)
 {
@@ -179,15 +185,16 @@ static void NvmParam_FillSaveData(Param_SaveData *data, const Param *param)
     NvmParam_CopyPidToSave(&data->Pid_Pos, &param->Pid_Pos);
     NvmParam_CopyPidToSave(&data->Pid_PosVel, &param->Pid_PosVel);
     NvmParam_CopyPidToSave(&data->Pid_PosEle, &param->Pid_PosEle);
-    NvmParam_CopyPidToSave(&data->Pid_Vel, &param->Pid_Vel);
-    NvmParam_CopyPidToSave(&data->Pid_Ele, &param->Pid_Ele);
+    memcpy(data->LowSpeedCompMap_mA, param->LowSpeedCompMap_mA,
+           sizeof(data->LowSpeedCompMap_mA));
 
     data->CycleTimeMs = param->CycleTimeMs;
     data->TempLimit = param->TempLimit;
 
     data->EncoderOffset = param->EncoderOffset;
-    data->EncoderExpect = param->EncoderExpect;
-    data->EncoderSpeedExpect = param->EncoderSpeedExpect;
+    data->LowSpeedCompEnable = 0U;
+    data->PositionDeadbandCounts = param->PositionDeadbandCounts;
+    data->LowSpeedCompMaxSpeed_cps = param->LowSpeedCompMaxSpeed_cps;
     data->SpeedMax = param->SpeedMax;
     data->AccelMax = param->AccelMax;
     data->DecelMax = param->DecelMax;
@@ -207,6 +214,35 @@ static void NvmParam_FillSaveData(Param_SaveData *data, const Param *param)
     data->NodeCount = param->NodeCount;
     data->NodePosition = param->NodePosition;
     data->ReplySlotUs = param->ReplySlotUs;
+    data->ControlSource = param->ControlSource;
+    data->CrsfPositionChannel = param->CrsfPositionChannel;
+    data->CrsfCenterChannel = param->CrsfCenterChannel;
+    data->CrsfEnableChannel = param->CrsfEnableChannel;
+    data->CrsfAutoEnable = param->CrsfAutoEnable;
+    data->CrsfReserved164 = NVM_PARAM_LOW_SPEED_MARKER8;
+    data->CrsfChannelMin = param->CrsfChannelMin;
+    data->CrsfChannelCenter = param->CrsfChannelCenter;
+    data->CrsfChannelMax = param->CrsfChannelMax;
+    data->CrsfCenterTrigger = param->CrsfCenterTrigger;
+    data->CrsfEnableThreshold = param->CrsfEnableThreshold;
+    data->CrsfReserved176 = NVM_PARAM_LOW_SPEED_MARKER16;
+    data->CrsfArmCurrentLimit_mA = param->CrsfArmCurrentLimit_mA;
+    data->CrsfArmSpeed_cps = param->CrsfArmSpeed_cps;
+    data->CrsfArmFollowError = param->CrsfArmFollowError;
+    data->CrsfArmTimeoutMs = param->CrsfArmTimeoutMs;
+    data->CrsfWatchdogMs = param->CrsfWatchdogMs;
+    data->CrsfNegativePositionLimit = param->CrsfNegativePositionLimit;
+    data->CrsfPositivePositionLimit = param->CrsfPositivePositionLimit;
+    data->TorqueEncoderCountsPerRev = param->TorqueEncoderCountsPerRev;
+    data->TorqueCurrentLimit_mA = param->TorqueCurrentLimit_mA;
+    data->MotorTorqueParams = param->MotorTorqueParams;
+    data->MechanicalParams = param->MechanicalParams;
+    data->MotorInductance_uH = param->MotorInductance_uH;
+    data->CurrentPeakLimit_mA = param->CurrentPeakLimit_mA;
+    data->CurrentAbsoluteLimit_mA = param->CurrentAbsoluteLimit_mA;
+    data->StallCurrentThreshold_mA = param->StallCurrentThreshold_mA;
+    data->StallSpeedThreshold_cps = param->StallSpeedThreshold_cps;
+    data->StallConfirmTimeMs = param->StallConfirmTimeMs;
 }
 
 static void NvmParam_ApplySaveData(Param *param, const Param_SaveData *data)
@@ -214,17 +250,16 @@ static void NvmParam_ApplySaveData(Param *param, const Param_SaveData *data)
     NvmParam_CopyPidFromSave(&param->Pid_Pos, &data->Pid_Pos);
     NvmParam_CopyPidFromSave(&param->Pid_PosVel, &data->Pid_PosVel);
     NvmParam_CopyPidFromSave(&param->Pid_PosEle, &data->Pid_PosEle);
-    NvmParam_CopyPidFromSave(&param->Pid_Vel, &data->Pid_Vel);
-    NvmParam_CopyPidFromSave(&param->Pid_Ele, &data->Pid_Ele);
 
     param->CycleTimeMs = data->CycleTimeMs;
     param->TempLimit = (data->TempLimit >= 20 && data->TempLimit <= 85) ?
                        data->TempLimit : 40;
 
     param->EncoderOffset = data->EncoderOffset;
-    param->EncoderExpect = data->EncoderExpect;
-    param->EncoderSpeedExpect = data->EncoderSpeedExpect;
     param->SpeedMax = data->SpeedMax;
+    param->PositionDeadbandCounts = data->PositionDeadbandCounts != 0U
+                                        ? data->PositionDeadbandCounts
+                                        : PID_POSITION_DEADBAND_DEFAULT_COUNTS;
     param->AccelMax = data->AccelMax;
     param->DecelMax = data->DecelMax;
     param->EncoderVeer = data->EncoderVeer;
@@ -248,8 +283,138 @@ static void NvmParam_ApplySaveData(Param *param, const Param_SaveData *data)
                       data->Topology : BUS_TOPOLOGY_PARALLEL;
     param->NodeCount = NvmParam_ClampNodeCount(data->NodeCount);
     param->NodePosition = NvmParam_ClampNodePosition(data->NodePosition, param->NodeCount);
-    param->ReplySlotUs = (data->ReplySlotUs >= 50U && data->ReplySlotUs <= 1000U) ?
+    param->ReplySlotUs = (data->ReplySlotUs >= 50U && data->ReplySlotUs <= 8000U) ?
                          data->ReplySlotUs : 120U;
+    param->ControlSource = data->ControlSource <= CONTROL_SOURCE_CRSF
+                               ? data->ControlSource : CONTROL_SOURCE_PWM_INPUT;
+    param->CrsfPositionChannel = data->CrsfPositionChannel <= 16U
+                                     ? data->CrsfPositionChannel : 1U;
+    param->CrsfCenterChannel = data->CrsfCenterChannel <= 16U
+                                   ? data->CrsfCenterChannel : 0U;
+    param->CrsfEnableChannel = data->CrsfEnableChannel <= 16U
+                                    ? data->CrsfEnableChannel : 0U;
+    param->CrsfAutoEnable = data->CrsfAutoEnable;
+    if (data->CrsfChannelMin < data->CrsfChannelCenter
+        && data->CrsfChannelCenter < data->CrsfChannelMax
+        && data->CrsfChannelMax <= 2047U)
+    {
+        param->CrsfChannelMin = data->CrsfChannelMin;
+        param->CrsfChannelCenter = data->CrsfChannelCenter;
+        param->CrsfChannelMax = data->CrsfChannelMax;
+    }
+    param->CrsfCenterTrigger = data->CrsfCenterTrigger <= 2047U
+                                   ? data->CrsfCenterTrigger : 1200U;
+    param->CrsfEnableThreshold = data->CrsfEnableThreshold <= 2047U
+                                    ? data->CrsfEnableThreshold : 1200U;
+    param->CrsfArmCurrentLimit_mA = (data->CrsfArmCurrentLimit_mA >= 1U
+                                     && data->CrsfArmCurrentLimit_mA <= 30000U)
+                                        ? data->CrsfArmCurrentLimit_mA : 300U;
+    param->CrsfArmSpeed_cps = (data->CrsfArmSpeed_cps >= 1U
+                               && data->CrsfArmSpeed_cps <= 1000000UL)
+                                  ? data->CrsfArmSpeed_cps : 5000U;
+    param->CrsfArmFollowError = data->CrsfArmFollowError != 0U
+                                    ? data->CrsfArmFollowError : 100U;
+    param->CrsfArmTimeoutMs = (data->CrsfArmTimeoutMs >= 100U
+                               && data->CrsfArmTimeoutMs <= 10000U)
+                                  ? data->CrsfArmTimeoutMs : 2000U;
+    param->CrsfWatchdogMs = (data->CrsfWatchdogMs >= 20U
+                             && data->CrsfWatchdogMs <= 2000U)
+                                ? data->CrsfWatchdogMs : 100U;
+    if (data->CrsfNegativePositionLimit < data->CrsfPositivePositionLimit
+        && data->CrsfNegativePositionLimit >= -1000000000L
+        && data->CrsfPositivePositionLimit <= 1000000000L)
+    {
+        param->CrsfNegativePositionLimit = data->CrsfNegativePositionLimit;
+        param->CrsfPositivePositionLimit = data->CrsfPositivePositionLimit;
+    }
+    param->TorqueEncoderCountsPerRev = data->TorqueEncoderCountsPerRev != 0U
+                                           ? data->TorqueEncoderCountsPerRev : 16384U;
+    param->TorqueCurrentLimit_mA = data->TorqueCurrentLimit_mA <= 30000U
+                                       ? data->TorqueCurrentLimit_mA : 0U;
+    param->MotorTorqueParams.torque_constant_uNm_per_A =
+        data->MotorTorqueParams.torque_constant_uNm_per_A <= 1000000UL
+            ? data->MotorTorqueParams.torque_constant_uNm_per_A : 0U;
+    param->MotorTorqueParams.torque_temp_coefficient_ppm_per_C =
+        (data->MotorTorqueParams.torque_temp_coefficient_ppm_per_C >= -10000L
+         && data->MotorTorqueParams.torque_temp_coefficient_ppm_per_C <= 10000L)
+            ? data->MotorTorqueParams.torque_temp_coefficient_ppm_per_C : 0;
+    param->MotorTorqueParams.back_emf_uV_per_rpm =
+        data->MotorTorqueParams.back_emf_uV_per_rpm <= 10000000UL
+            ? data->MotorTorqueParams.back_emf_uV_per_rpm : 0U;
+    param->MotorTorqueParams.terminal_resistance_mOhm =
+        data->MotorTorqueParams.terminal_resistance_mOhm <= 10000000UL
+            ? data->MotorTorqueParams.terminal_resistance_mOhm : 0U;
+    param->MotorTorqueParams.resistance_temp_coefficient_ppm_per_C =
+        data->MotorTorqueParams.resistance_temp_coefficient_ppm_per_C <= 10000U
+            ? data->MotorTorqueParams.resistance_temp_coefficient_ppm_per_C : 4000U;
+    param->MotorTorqueParams.brush_drop_mV =
+        data->MotorTorqueParams.brush_drop_mV <= 5000U
+            ? data->MotorTorqueParams.brush_drop_mV : 0U;
+    param->MotorTorqueParams.reference_temperature_C =
+        (data->MotorTorqueParams.reference_temperature_C >= -40
+         && data->MotorTorqueParams.reference_temperature_C <= 200)
+            ? data->MotorTorqueParams.reference_temperature_C : 25;
+    param->MechanicalParams.total_inertia_ug_cm2 =
+        data->MechanicalParams.total_inertia_ug_cm2 <= 100000000UL
+            ? data->MechanicalParams.total_inertia_ug_cm2 : 0U;
+    param->MechanicalParams.coulomb_friction_uNm =
+        data->MechanicalParams.coulomb_friction_uNm <= 10000000UL
+            ? data->MechanicalParams.coulomb_friction_uNm : 0U;
+    param->MechanicalParams.viscous_friction_nNm_per_rpm =
+        data->MechanicalParams.viscous_friction_nNm_per_rpm <= 10000000UL
+            ? data->MechanicalParams.viscous_friction_nNm_per_rpm : 0U;
+    param->MechanicalParams.friction_deadband_cps =
+        data->MechanicalParams.friction_deadband_cps;
+    param->MotorInductance_uH = (data->MotorInductance_uH >= 1U
+                                 && data->MotorInductance_uH <= 10000U)
+                                    ? data->MotorInductance_uH : 10U;
+    if (data->CurrentPeakLimit_mA >= 100U
+        && data->CurrentAbsoluteLimit_mA > data->CurrentPeakLimit_mA
+        && data->CurrentAbsoluteLimit_mA <= 1830U)
+    {
+        param->CurrentPeakLimit_mA = data->CurrentPeakLimit_mA;
+        param->CurrentAbsoluteLimit_mA = data->CurrentAbsoluteLimit_mA;
+    }
+    else
+    {
+        param->CurrentPeakLimit_mA = 1500U;
+        param->CurrentAbsoluteLimit_mA = 1750U;
+    }
+    param->StallCurrentThreshold_mA =
+        (data->StallCurrentThreshold_mA >= 50U
+         && data->StallCurrentThreshold_mA <= 1500U)
+            ? data->StallCurrentThreshold_mA : 300U;
+    param->StallSpeedThreshold_cps =
+        (data->StallSpeedThreshold_cps >= 10U)
+            ? data->StallSpeedThreshold_cps : 300U;
+    param->StallConfirmTimeMs =
+        (data->StallConfirmTimeMs >= 500U
+         && data->StallConfirmTimeMs <= 10000U)
+            ? data->StallConfirmTimeMs : 3000U;
+    if (data->CrsfReserved164 == NVM_PARAM_LOW_SPEED_MARKER8
+        && data->CrsfReserved176 == NVM_PARAM_LOW_SPEED_MARKER16)
+    {
+        param->LowSpeedCompMaxSpeed_cps =
+            (data->LowSpeedCompMaxSpeed_cps == 0U
+             || (data->LowSpeedCompMaxSpeed_cps >= 500U
+             && data->LowSpeedCompMaxSpeed_cps <= 5000U)
+            )
+                ? data->LowSpeedCompMaxSpeed_cps
+                : 0U;
+        memcpy(param->LowSpeedCompMap_mA, data->LowSpeedCompMap_mA,
+               sizeof(param->LowSpeedCompMap_mA));
+    }
+    else
+    {
+        param->LowSpeedCompMaxSpeed_cps = 0U;
+        memset(param->LowSpeedCompMap_mA, 0,
+               sizeof(param->LowSpeedCompMap_mA));
+    }
+    param->MotorWindingTemperature_C =
+        param->MotorTorqueParams.reference_temperature_C;
+    /* Runtime arm state is never restored from Flash. / 运行期软使能状态绝不从 Flash 恢复。 */
+    param->CrsfManualEnable = false;
+    param->CrsfStatus = 0U;
 }
 
 static bool NvmParam_FindLatest(const NvmParamRecord **latest, uint32_t *next_slot)
@@ -475,10 +640,9 @@ bool NvmParam_HasValidData(void)
 uint32_t NvmParam_GetLatestSequence(void)
 {
     const NvmParamRecord *latest = NULL;
-
     if (!NvmParam_FindLatest(&latest, NULL))
     {
-        return 0;
+        return 0U;
     }
 
     return latest->sequence;

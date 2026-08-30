@@ -124,8 +124,37 @@ static uint16_t Dynamixel2_StatusWord(const Dynamixel2Context *context)
         status |= DXL2_STATUS_OVERTEMPERATURE;
     if (context->param->ControlSource == CONTROL_SOURCE_PWM_INPUT) status |= DXL2_STATUS_PWM_SOURCE;
     if (context->param->ControlSource == CONTROL_SOURCE_SERIAL) status |= DXL2_STATUS_SERIAL_SOURCE;
+    if (context->param->ControlSource == CONTROL_SOURCE_CRSF) status |= DXL2_STATUS_CRSF_SOURCE;
     if (context->param->FaultCode == DXL2_FAULT_NONE) status |= DXL2_STATUS_FAULT_FREE;
     status |= DXL2_STATUS_PROTOCOL_ACTIVE;
+    return status;
+}
+
+static uint16_t Dynamixel2_TorqueModelStatus(const Dynamixel2Context *context)
+{
+    const Param *param = context->param;
+    uint16_t status = 0U;
+
+    if (MotorTorqueModel_IsTorqueValid(&param->MotorTorqueParams))
+        status |= DXL2_TORQUE_STATUS_TORQUE_MODEL_VALID;
+    if (param->MotorTorqueResult.electrical_model_valid)
+        status |= DXL2_TORQUE_STATUS_ELECTRICAL_MODEL_VALID;
+    if (param->MechanicalResult.valid)
+        status |= DXL2_TORQUE_STATUS_MECHANICAL_MODEL_VALID;
+    if (param->TorqueCommandVoltageLimited)
+        status |= DXL2_TORQUE_STATUS_COMMAND_VOLTAGE_LIMITED;
+    if (param->MotorTorqueResult.voltage_limited)
+        status |= DXL2_TORQUE_STATUS_OPERATING_VOLTAGE_LIMITED;
+    if ((param->ProtectionFlags & PROTECTION_TORQUE_MODEL_INVALID) != 0U)
+        status |= DXL2_TORQUE_STATUS_CONFIGURATION_FAULT;
+    if (param->CurrentSampleValid)
+        status |= DXL2_TORQUE_STATUS_CURRENT_SAMPLE_VALID;
+    if (param->CurrentEstimated)
+        status |= DXL2_TORQUE_STATUS_CURRENT_ESTIMATED;
+    if (!param->CurrentSampleValid &&
+        (param->DriveRunMode == 2U || param->DriveRunMode == 3U) &&
+        param->DrivePower != 0)
+        status |= DXL2_TORQUE_STATUS_CURRENT_SAMPLE_UNQUALIFIED;
     return status;
 }
 
@@ -204,6 +233,9 @@ static void Dynamixel2_BuildControlTable(const Dynamixel2Context *context,
     Dynamixel2_WriteU16(&table[DXL2_ADDR_SERIAL_WATCHDOG_MS], context->param->SerialWatchdogMs);
     table[DXL2_ADDR_NODE_POSITION] = context->param->NodePosition;
     Dynamixel2_WriteU16(&table[DXL2_ADDR_REPLY_SLOT_US], context->param->ReplySlotUs);
+    *(uint16_t *)&table[DXL2_ADDR_ACCEL_LIMIT_CPS2] = context->param->AccelMax;
+    table[DXL2_ADDR_POSITION_DEADBAND_COUNT] =
+        context->param->PositionDeadbandCounts;
 
     table[16] = context->param->ControlSource;
     table[17] = (uint8_t)context->pending_command.mode;
@@ -244,6 +276,158 @@ static void Dynamixel2_BuildControlTable(const Dynamixel2Context *context,
     Dynamixel2_WriteU32(&table[138], context->rx_crc_error_count);
     Dynamixel2_WriteU32(&table[142], context->rx_bad_packet_count);
     Dynamixel2_WriteU32(&table[146], context->rx_packet_count);
+    *(uint16_t *)&table[DXL2_ADDR_DECEL_LIMIT_CPS2] = context->param->DecelMax;
+
+    table[DXL2_ADDR_CRSF_POSITION_CHANNEL] = context->param->CrsfPositionChannel;
+    table[DXL2_ADDR_CRSF_CENTER_CHANNEL] = context->param->CrsfCenterChannel;
+    table[DXL2_ADDR_CRSF_ENABLE_CHANNEL] = context->param->CrsfEnableChannel;
+    table[DXL2_ADDR_CRSF_AUTO_ENABLE] = context->param->CrsfAutoEnable ? 1U : 0U;
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_CHANNEL_MIN],
+                        context->param->CrsfChannelMin);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_CHANNEL_CENTER],
+                        context->param->CrsfChannelCenter);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_CHANNEL_MAX],
+                        context->param->CrsfChannelMax);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_CENTER_TRIGGER],
+                        context->param->CrsfCenterTrigger);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_ENABLE_THRESHOLD],
+                        context->param->CrsfEnableThreshold);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_ARM_CURRENT_LIMIT_MA],
+                        context->param->CrsfArmCurrentLimit_mA);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_CRSF_ARM_SPEED_CPS],
+                        context->param->CrsfArmSpeed_cps);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_ARM_FOLLOW_ERROR],
+                        context->param->CrsfArmFollowError);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_ARM_TIMEOUT_MS],
+                        context->param->CrsfArmTimeoutMs);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_WATCHDOG_MS],
+                        context->param->CrsfWatchdogMs);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_CRSF_NEGATIVE_POSITION_LIMIT],
+                        (uint32_t)context->param->CrsfNegativePositionLimit);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_CRSF_POSITIVE_POSITION_LIMIT],
+                        (uint32_t)context->param->CrsfPositivePositionLimit);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_STATUS], context->param->CrsfStatus);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_RAW_POSITION],
+                        context->param->CrsfRawPosition);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_RAW_ENABLE],
+                        context->param->CrsfRawEnable);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CRSF_RAW_CENTER],
+                        context->param->CrsfRawCenter);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_CRSF_CENTER_REFERENCE],
+                        (uint32_t)context->param->CrsfCenterReference);
+
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_TARGET_SHAFT_TORQUE_UNM],
+                        (uint32_t)context->pending_command.target_torque_uNm);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_TARGET_ELECTROMAGNETIC_TORQUE_UNM],
+                        (uint32_t)context->param->TargetElectromagneticTorque_uNm);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_ACTUAL_ELECTROMAGNETIC_TORQUE_UNM],
+                        (uint32_t)context->param->MotorTorqueResult.electromagnetic_torque_uNm);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_ESTIMATED_SHAFT_LOAD_TORQUE_UNM],
+                        (uint32_t)context->param->MechanicalResult.shaft_load_torque_uNm);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_INERTIA_TORQUE_UNM],
+                        (uint32_t)context->param->MechanicalResult.inertia_torque_uNm);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_INTERNAL_LOSS_TORQUE_UNM],
+                        (uint32_t)context->param->MechanicalResult.internal_loss_torque_uNm);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_REQUIRED_MOTOR_VOLTAGE_MV],
+                        (uint32_t)context->param->MotorTorqueResult.required_voltage_mV);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_BACK_EMF_MV],
+                        (uint32_t)context->param->MotorTorqueResult.back_emf_mV);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_AVAILABLE_CURRENT_MA],
+                        (uint32_t)context->param->MotorTorqueResult.available_current_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_TORQUE_MODEL_STATUS],
+                        Dynamixel2_TorqueModelStatus(context));
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_MOTOR_WINDING_TEMPERATURE_C],
+                        (uint16_t)context->param->MotorWindingTemperature_C);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_TORQUE_ENCODER_COUNTS_PER_REV],
+                        context->param->TorqueEncoderCountsPerRev);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_TORQUE_CURRENT_LIMIT_MA],
+                        context->param->TorqueCurrentLimit_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_MOTOR_REFERENCE_TEMPERATURE_C],
+                        (uint16_t)context->param->MotorTorqueParams.reference_temperature_C);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_TORQUE_CONSTANT_UNM_PER_A],
+                        context->param->MotorTorqueParams.torque_constant_uNm_per_A);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_TORQUE_TEMP_COEFFICIENT_PPM_PER_C],
+                        (uint32_t)context->param->MotorTorqueParams.torque_temp_coefficient_ppm_per_C);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_BACK_EMF_UV_PER_RPM],
+                        context->param->MotorTorqueParams.back_emf_uV_per_rpm);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_TERMINAL_RESISTANCE_MOHM],
+                        context->param->MotorTorqueParams.terminal_resistance_mOhm);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_RESISTANCE_TEMP_COEFFICIENT_PPM_PER_C],
+                        context->param->MotorTorqueParams.resistance_temp_coefficient_ppm_per_C);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_BRUSH_DROP_MV],
+                        context->param->MotorTorqueParams.brush_drop_mV);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_TOTAL_INERTIA_UG_CM2],
+                        context->param->MechanicalParams.total_inertia_ug_cm2);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_COULOMB_FRICTION_UNM],
+                        context->param->MechanicalParams.coulomb_friction_uNm);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_VISCOUS_FRICTION_NNM_PER_RPM],
+                        context->param->MechanicalParams.viscous_friction_nNm_per_rpm);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_FRICTION_DEADBAND_CPS],
+                        context->param->MechanicalParams.friction_deadband_cps);
+
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_ADC_RAW],
+                        context->param->CurrentAdcRaw);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_ADC_OFFSET],
+                        context->param->CurrentAdcOffset);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_INSTANT_MA],
+                        (uint16_t)context->param->CurrentInstant_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_FILTERED_MA],
+                        (uint16_t)context->param->INA181_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_LOGICAL_MA],
+                        (uint16_t)context->param->CurrentLogical_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_IREF_MA],
+                        (uint16_t)context->param->ExpectMA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_VFF_PWM],
+                        (uint16_t)context->param->CurrentModelPwm);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_VPI_PWM],
+                        (uint16_t)context->param->CurrentCorrectionPwm);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_LOOP_STATUS],
+                        context->param->CurrentLoopStatus);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_BRIDGE_STATUS],
+                        context->param->CurrentBridgeStatus);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_SAMPLE_AGE_MS],
+                        context->param->CurrentSampleAgeMs);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_CURRENT_VALID_TOTAL],
+                        context->param->CurrentValidTotal);
+    Dynamixel2_WriteU32(&table[DXL2_ADDR_CURRENT_INVALID_TOTAL],
+                        context->param->CurrentInvalidTotal);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_WINDOW_VALID],
+                        context->param->CurrentWindowValid);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_WINDOW_MIN_MA],
+                        (uint16_t)context->param->CurrentWindowMin_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_WINDOW_MAX_MA],
+                        (uint16_t)context->param->CurrentWindowMax_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_WINDOW_AVG_MA],
+                        (uint16_t)context->param->CurrentWindowAvg_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_WINDOW_INVALID],
+                        context->param->CurrentWindowInvalid);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_HARD_LIMIT_TRIPS],
+                        context->param->CurrentHardLimitTrips);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_PI_FROZEN],
+                        context->param->CurrentPiFrozenCount);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_MOTOR_INDUCTANCE_UH],
+                        context->param->MotorInductance_uH);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_PEAK_LIMIT_MA],
+                        context->param->CurrentPeakLimit_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_ABSOLUTE_LIMIT_MA],
+                        context->param->CurrentAbsoluteLimit_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_STALL_CURRENT_THRESHOLD_MA],
+                        context->param->StallCurrentThreshold_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_STALL_SPEED_THRESHOLD_CPS],
+                        context->param->StallSpeedThreshold_cps);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_STALL_CONFIRM_TIME_MS],
+                        context->param->StallConfirmTimeMs);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_AVERAGE_MA],
+                        (uint16_t)context->param->CurrentAverage_mA);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_CURRENT_PEAK_CHOP_EVENTS],
+                        context->param->CurrentPeakChopEvents);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_STALL_ELAPSED_MS],
+                        context->param->StallElapsedMs);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_LOW_SPEED_COMP_MAX_SPEED_CPS],
+                        context->param->LowSpeedCompMaxSpeed_cps);
+    memcpy(&table[DXL2_ADDR_LOW_SPEED_COMP_FORWARD_MAP],
+           context->param->LowSpeedCompMap_mA,
+           sizeof(context->param->LowSpeedCompMap_mA));
 }
 
 static uint8_t Dynamixel2_ReadTable(Dynamixel2Context *context, uint16_t address,
@@ -277,9 +461,25 @@ static uint8_t Dynamixel2_WritePid(Dynamixel2Context *context, uint16_t address,
     if ((offset == 0U || offset == 2U || offset == 4U
          || offset == 10U || offset == 12U) && length == 2U)
     {
+        uint16_t value = Dynamixel2_ReadU16(data);
+        if (base == DXL2_ADDR_CURRENT_PID &&
+            ((offset == 0U && value > CURRENT_PID_KP_MAX) ||
+             (offset == 2U && value > CURRENT_PID_KI_MAX) ||
+             (offset == 4U && value != 0U) ||
+             (offset == 10U &&
+              (value > CURRENT_PID_VOLTAGE_MAX_MV ||
+               value < pid->out_min)) ||
+             (offset == 12U && value > pid->out_max)))
+        {
+            return DXL2_ERROR_DATA_RANGE;
+        }
+        if (base == DXL2_ADDR_POSITION_PID && offset == 4U
+            && value > POSITION_PID_KD_MAX)
+        {
+            return DXL2_ERROR_DATA_RANGE;
+        }
         if (apply)
         {
-            uint16_t value = Dynamixel2_ReadU16(data);
             if (offset == 0U) pid->Kp = value;
             else if (offset == 2U) pid->Ki = value;
             else if (offset == 4U) pid->Kd = value;
@@ -291,7 +491,9 @@ static uint8_t Dynamixel2_WritePid(Dynamixel2Context *context, uint16_t address,
     if (offset == 6U && length == 4U)
     {
         int32_t value = (int32_t)Dynamixel2_ReadU32(data);
-        if (value < 0)
+        if (value < 0 ||
+            (base == DXL2_ADDR_CURRENT_PID &&
+             value > CURRENT_PID_INTEGRAL_MAX))
         {
             return DXL2_ERROR_DATA_RANGE;
         }
@@ -310,7 +512,8 @@ static uint8_t Dynamixel2_WritePid(Dynamixel2Context *context, uint16_t address,
 static bool Dynamixel2_IsCommandAddress(uint16_t address)
 {
     return address == 16U || address == 17U || address == 18U || address == 20U
-           || address == 22U || address == 26U || address == 30U || address == 34U;
+           || address == 22U || address == 26U || address == 30U || address == 34U
+           || address == DXL2_ADDR_TARGET_SHAFT_TORQUE_UNM;
 }
 
 static uint8_t Dynamixel2_WriteCommandBlock(Dynamixel2Context *context,
@@ -325,10 +528,11 @@ static uint8_t Dynamixel2_WriteCommandBlock(Dynamixel2Context *context,
     uint16_t sequence = length == DXL2_FULL_COMMAND_IMAGE_SIZE
                             ? Dynamixel2_ReadU16(&data[18]) : 0U;
 
-    if (source > CONTROL_SOURCE_PWM_INPUT || mode > SERVO_MODE_POSITION
+    if (source > CONTROL_SOURCE_CRSF || mode > SERVO_MODE_TORQUE
         || (control_word & (uint16_t)~(DXL2_CONTROL_ENABLE
                                       | DXL2_CONTROL_USE_EXECUTE_TICK
-                                      | DXL2_CONTROL_CLEAR_FAULT)) != 0U)
+                                      | DXL2_CONTROL_CLEAR_FAULT
+                                      | DXL2_CONTROL_POSITION_MULTI_TURN)) != 0U)
     {
         return DXL2_ERROR_DATA_RANGE;
     }
@@ -339,6 +543,15 @@ static uint8_t Dynamixel2_WriteCommandBlock(Dynamixel2Context *context,
     if (!apply)
     {
         return DXL2_ERROR_NONE;
+    }
+
+    /* Fault clear is a safety command, not an ordinary latest-value update.
+     * It must preempt an armed/scheduled pending image and must not be lost
+     * when a newly connected host happens to reuse the last 16-bit sequence. */
+    if (clear_fault)
+    {
+        context->pending_valid = false;
+        context->pending_sequence_valid = false;
     }
 
     if (length == DXL2_FULL_COMMAND_IMAGE_SIZE)
@@ -354,7 +567,7 @@ static uint8_t Dynamixel2_WriteCommandBlock(Dynamixel2Context *context,
             }
             return DXL2_ERROR_RESULT_FAIL;
         }
-        if (context->applied_sequence_valid
+        if (!clear_fault && context->applied_sequence_valid
             && sequence == context->applied_sequence)
         {
             return DXL2_ERROR_NONE;
@@ -369,9 +582,12 @@ static uint8_t Dynamixel2_WriteCommandBlock(Dynamixel2Context *context,
         /* 切换控制源时始终撤销使能；必须随后再次写控制字才能使能输出。 */
         context->active_command.enable = false;
         context->pending_command.enable = false;
+        context->param->CrsfManualEnable = false;
     }
     context->param->ControlSource = source;
     context->pending_command.mode = (ServoMode)mode;
+    context->pending_command.position_multi_turn =
+        (control_word & DXL2_CONTROL_POSITION_MULTI_TURN) != 0U;
     context->pending_command.target_current_mA = (int16_t)Dynamixel2_ReadU16(&data[4]);
     context->pending_command.target_speed = (int32_t)Dynamixel2_ReadU32(&data[6]);
     context->pending_command.target_position = (int32_t)Dynamixel2_ReadU32(&data[10]);
@@ -395,6 +611,10 @@ static uint8_t Dynamixel2_WriteCommandBlock(Dynamixel2Context *context,
     }
     /* Fault clear is always disarmed; enabling requires a later explicit write. */
     /* 清故障写入始终保持未使能；使能必须由后续独立写入显式触发。 */
+    context->param->CrsfManualEnable = !clear_fault
+                                       && ((control_word & DXL2_CONTROL_ENABLE) != 0U)
+                                       && source == CONTROL_SOURCE_CRSF
+                                       && context->param->FaultCode == 0U;
     context->pending_command.enable = !clear_fault
                                       && ((control_word & DXL2_CONTROL_ENABLE) != 0U)
                                       && source == CONTROL_SOURCE_SERIAL
@@ -422,13 +642,14 @@ static uint8_t Dynamixel2_WriteCommand(Dynamixel2Context *context, uint16_t addr
     {
     case 16U:
         if (length != 1U) return DXL2_ERROR_DATA_LENGTH;
-        if (data[0] > CONTROL_SOURCE_PWM_INPUT) return DXL2_ERROR_DATA_RANGE;
+        if (data[0] > CONTROL_SOURCE_CRSF) return DXL2_ERROR_DATA_RANGE;
         if (apply)
         {
             if (context->param->ControlSource != data[0])
             {
                 context->active_command.enable = false;
                 context->pending_command.enable = false;
+                context->param->CrsfManualEnable = false;
             }
             context->param->ControlSource = data[0];
             Dynamixel2_ResetWatchdog(context);
@@ -436,7 +657,7 @@ static uint8_t Dynamixel2_WriteCommand(Dynamixel2Context *context, uint16_t addr
         return DXL2_ERROR_NONE;
     case 17U:
         if (length != 1U) return DXL2_ERROR_DATA_LENGTH;
-        if (data[0] > SERVO_MODE_POSITION) return DXL2_ERROR_DATA_RANGE;
+        if (data[0] > SERVO_MODE_TORQUE) return DXL2_ERROR_DATA_RANGE;
         if (apply)
         {
             context->pending_command.mode = (ServoMode)data[0];
@@ -452,7 +673,8 @@ static uint8_t Dynamixel2_WriteCommand(Dynamixel2Context *context, uint16_t addr
         control_word = Dynamixel2_ReadU16(data);
         if ((control_word & (uint16_t)~(DXL2_CONTROL_ENABLE
                                        | DXL2_CONTROL_USE_EXECUTE_TICK
-                                       | DXL2_CONTROL_CLEAR_FAULT)) != 0U)
+                                       | DXL2_CONTROL_CLEAR_FAULT
+                                       | DXL2_CONTROL_POSITION_MULTI_TURN)) != 0U)
             return DXL2_ERROR_DATA_RANGE;
         clear_fault = (control_word & DXL2_CONTROL_CLEAR_FAULT) != 0U;
         if (apply)
@@ -463,6 +685,12 @@ static uint8_t Dynamixel2_WriteCommand(Dynamixel2Context *context, uint16_t addr
             }
             context->execute_scheduled = (control_word
                                           & DXL2_CONTROL_USE_EXECUTE_TICK) != 0U;
+            context->pending_command.position_multi_turn =
+                (control_word & DXL2_CONTROL_POSITION_MULTI_TURN) != 0U;
+            context->param->CrsfManualEnable = !clear_fault
+                                               && ((control_word & DXL2_CONTROL_ENABLE) != 0U)
+                                               && context->param->ControlSource == CONTROL_SOURCE_CRSF
+                                               && context->param->FaultCode == 0U;
             context->pending_command.enable = !clear_fault
                                               && ((control_word & DXL2_CONTROL_ENABLE) != 0U)
                                               && context->param->ControlSource == CONTROL_SOURCE_SERIAL
@@ -511,6 +739,16 @@ static uint8_t Dynamixel2_WriteCommand(Dynamixel2Context *context, uint16_t addr
             context->pending_sequence_valid = true;
         }
         return DXL2_ERROR_NONE;
+    case DXL2_ADDR_TARGET_SHAFT_TORQUE_UNM:
+        if (length != 4U) return DXL2_ERROR_DATA_LENGTH;
+        if (apply)
+        {
+            context->pending_command.target_torque_uNm =
+                (int32_t)Dynamixel2_ReadU32(data);
+            context->pending_valid = true;
+            Dynamixel2_ResetWatchdog(context);
+        }
+        return DXL2_ERROR_NONE;
     default:
         return DXL2_ERROR_ACCESS;
     }
@@ -545,12 +783,15 @@ _Static_assert(sizeof(Param) < DXL2_WRITE_ACTION_FLAG,
                "Param offsets exceed compact write metadata");
 _Static_assert(sizeof(((Param *)0)->SerialWatchdogMs) == 2U
                    && sizeof(((Param *)0)->ReplySlotUs) == 2U
-                   && sizeof(((Param *)0)->SpeedMax) == 2U,
+                   && sizeof(((Param *)0)->SpeedMax) == 2U
+                   && sizeof(((Param *)0)->AccelMax) == 2U
+                   && sizeof(((Param *)0)->DecelMax) == 2U,
                "16-bit write metadata field width mismatch");
 _Static_assert(sizeof(((Param *)0)->NodePosition) == 1U
                    && sizeof(((Param *)0)->TempLimit) == 1U
                    && sizeof(((Param *)0)->DrivePwmMode) == 1U
-                   && sizeof(((Param *)0)->FailSafePolicy) == 1U,
+                   && sizeof(((Param *)0)->FailSafePolicy) == 1U
+                   && sizeof(((Param *)0)->PositionDeadbandCounts) == 1U,
                "8-bit write metadata field width mismatch");
 
 /*
@@ -566,6 +807,10 @@ static const Dynamixel2WriteRule Dynamixel2_WriteRules[] = {
     {DXL2_ADDR_NODE_POSITION, 1U, DXL2_WRITE_FIELD(NodePosition), 1U, UINT8_MAX},
     {DXL2_ADDR_REPLY_SLOT_US, 2U, DXL2_WRITE_FIELD(ReplySlotUs),
      DXL2_REPLY_SLOT_MIN_US, DXL2_REPLY_SLOT_MAX_US},
+    {DXL2_ADDR_ACCEL_LIMIT_CPS2, 2U, DXL2_WRITE_FIELD(AccelMax), 1U, UINT16_MAX},
+    {DXL2_ADDR_POSITION_DEADBAND_COUNT, 1U,
+     DXL2_WRITE_FIELD(PositionDeadbandCounts), 1U,
+     PID_POSITION_DEADBAND_MAX_COUNTS},
     {DXL2_ADDR_TEMPERATURE_LIMIT_C, 1U, DXL2_WRITE_FIELD(TempLimit), 20U, 85U},
     {DXL2_ADDR_SPEED_LIMIT_CPS, 2U, DXL2_WRITE_FIELD(SpeedMax), 1000U, UINT16_MAX},
     {DXL2_ADDR_PWM_MODE, 1U, DXL2_WRITE_FIELD(DrivePwmMode), 2U, 4U},
@@ -577,7 +822,8 @@ static const Dynamixel2WriteRule Dynamixel2_WriteRules[] = {
      0U, FAILSAFE_FALLBACK_PWM},
     {DXL2_ADDR_CLEAR_DIAGNOSTICS, 1U,
      DXL2_WRITE_ACTION(DXL2_WRITE_CLEAR_DIAGNOSTICS), 1U, 1U},
-    {DXL2_ADDR_SAVE_NVM, 1U, DXL2_WRITE_ACTION(DXL2_WRITE_SAVE_NVM), 1U, 1U}
+    {DXL2_ADDR_SAVE_NVM, 1U, DXL2_WRITE_ACTION(DXL2_WRITE_SAVE_NVM), 1U, 1U},
+    {DXL2_ADDR_DECEL_LIMIT_CPS2, 2U, DXL2_WRITE_FIELD(DecelMax), 1U, UINT16_MAX}
 };
 
 static const Dynamixel2WriteRule *Dynamixel2_FindWriteRule(uint16_t address)
@@ -670,6 +916,301 @@ static uint8_t Dynamixel2_ApplyWriteAction(Dynamixel2Context *context,
     return DXL2_ERROR_NONE;
 }
 
+static uint8_t Dynamixel2_WriteCrsfConfig(Dynamixel2Context *context,
+                                           uint16_t address,
+                                           const uint8_t *data,
+                                           uint16_t length, bool apply)
+{
+    Param *param = context->param;
+    uint16_t value;
+    int32_t signed_value;
+
+    /* CRSF mapping changes are configuration operations and are forbidden while armed. */
+    /* CRSF 映射修改属于配置操作；输出使能或软使能过程中禁止修改。 */
+    if (param->OutputEnabled || param->CrsfManualEnable
+        || (param->CrsfStatus & (CRSF_STATUS_ARM_TRACKING | CRSF_STATUS_ACTIVE)) != 0U)
+    {
+        return DXL2_ERROR_ACCESS;
+    }
+
+    switch (address)
+    {
+    case DXL2_ADDR_CRSF_POSITION_CHANNEL:
+        if (length != 1U) return DXL2_ERROR_DATA_LENGTH;
+        if (data[0] > 16U) return DXL2_ERROR_DATA_RANGE;
+        if (apply) param->CrsfPositionChannel = data[0];
+        break;
+    case DXL2_ADDR_CRSF_CENTER_CHANNEL:
+    case DXL2_ADDR_CRSF_ENABLE_CHANNEL:
+        if (length != 1U) return DXL2_ERROR_DATA_LENGTH;
+        if (data[0] > 16U) return DXL2_ERROR_DATA_RANGE;
+        if (apply)
+        {
+            if (address == DXL2_ADDR_CRSF_CENTER_CHANNEL)
+                param->CrsfCenterChannel = data[0];
+            else
+                param->CrsfEnableChannel = data[0];
+        }
+        break;
+    case DXL2_ADDR_CRSF_AUTO_ENABLE:
+        if (length != 1U) return DXL2_ERROR_DATA_LENGTH;
+        if (data[0] > 1U) return DXL2_ERROR_DATA_RANGE;
+        if (apply) param->CrsfAutoEnable = data[0] != 0U;
+        break;
+    case DXL2_ADDR_CRSF_CHANNEL_MIN:
+    case DXL2_ADDR_CRSF_CHANNEL_CENTER:
+    case DXL2_ADDR_CRSF_CHANNEL_MAX:
+    case DXL2_ADDR_CRSF_CENTER_TRIGGER:
+    case DXL2_ADDR_CRSF_ENABLE_THRESHOLD:
+    case DXL2_ADDR_CRSF_ARM_CURRENT_LIMIT_MA:
+    case DXL2_ADDR_CRSF_ARM_FOLLOW_ERROR:
+    case DXL2_ADDR_CRSF_ARM_TIMEOUT_MS:
+    case DXL2_ADDR_CRSF_WATCHDOG_MS:
+        if (length != 2U) return DXL2_ERROR_DATA_LENGTH;
+        value = Dynamixel2_ReadU16(data);
+        if ((address == DXL2_ADDR_CRSF_CHANNEL_MIN
+             && (value >= param->CrsfChannelCenter || value > 2047U))
+            || (address == DXL2_ADDR_CRSF_CHANNEL_CENTER
+                && (value <= param->CrsfChannelMin
+                    || value >= param->CrsfChannelMax || value > 2047U))
+            || (address == DXL2_ADDR_CRSF_CHANNEL_MAX
+                && (value <= param->CrsfChannelCenter || value > 2047U))
+            || ((address == DXL2_ADDR_CRSF_CENTER_TRIGGER
+                 || address == DXL2_ADDR_CRSF_ENABLE_THRESHOLD)
+                && value > 2047U)
+            || (address == DXL2_ADDR_CRSF_ARM_CURRENT_LIMIT_MA
+                && (value == 0U || value > 30000U))
+            || (address == DXL2_ADDR_CRSF_ARM_FOLLOW_ERROR && value == 0U)
+            || (address == DXL2_ADDR_CRSF_ARM_TIMEOUT_MS
+                && (value < 100U || value > 10000U))
+            || (address == DXL2_ADDR_CRSF_WATCHDOG_MS
+                && (value < 20U || value > 2000U)))
+        {
+            return DXL2_ERROR_DATA_RANGE;
+        }
+        if (apply)
+        {
+            if (address == DXL2_ADDR_CRSF_CHANNEL_MIN) param->CrsfChannelMin = (uint16_t)value;
+            else if (address == DXL2_ADDR_CRSF_CHANNEL_CENTER) param->CrsfChannelCenter = (uint16_t)value;
+            else if (address == DXL2_ADDR_CRSF_CHANNEL_MAX) param->CrsfChannelMax = (uint16_t)value;
+            else if (address == DXL2_ADDR_CRSF_CENTER_TRIGGER) param->CrsfCenterTrigger = (uint16_t)value;
+            else if (address == DXL2_ADDR_CRSF_ENABLE_THRESHOLD) param->CrsfEnableThreshold = (uint16_t)value;
+            else if (address == DXL2_ADDR_CRSF_ARM_CURRENT_LIMIT_MA) param->CrsfArmCurrentLimit_mA = (uint16_t)value;
+            else if (address == DXL2_ADDR_CRSF_ARM_FOLLOW_ERROR) param->CrsfArmFollowError = (uint16_t)value;
+            else if (address == DXL2_ADDR_CRSF_ARM_TIMEOUT_MS) param->CrsfArmTimeoutMs = (uint16_t)value;
+            else param->CrsfWatchdogMs = (uint16_t)value;
+        }
+        break;
+    case DXL2_ADDR_CRSF_ARM_SPEED_CPS:
+        if (length != 4U) return DXL2_ERROR_DATA_LENGTH;
+        value = Dynamixel2_ReadU32(data);
+        if (value == 0U || value > 1000000UL) return DXL2_ERROR_DATA_RANGE;
+        if (apply) param->CrsfArmSpeed_cps = value;
+        break;
+    case DXL2_ADDR_CRSF_NEGATIVE_POSITION_LIMIT:
+    case DXL2_ADDR_CRSF_POSITIVE_POSITION_LIMIT:
+        if (length != 4U) return DXL2_ERROR_DATA_LENGTH;
+        signed_value = (int32_t)Dynamixel2_ReadU32(data);
+        if (signed_value < -1000000000L || signed_value > 1000000000L
+            || (address == DXL2_ADDR_CRSF_NEGATIVE_POSITION_LIMIT
+                && signed_value >= param->CrsfPositivePositionLimit)
+            || (address == DXL2_ADDR_CRSF_POSITIVE_POSITION_LIMIT
+                && signed_value <= param->CrsfNegativePositionLimit))
+        {
+            return DXL2_ERROR_DATA_RANGE;
+        }
+        if (apply)
+        {
+            if (address == DXL2_ADDR_CRSF_NEGATIVE_POSITION_LIMIT)
+                param->CrsfNegativePositionLimit = signed_value;
+            else
+                param->CrsfPositivePositionLimit = signed_value;
+        }
+        break;
+    default:
+        return DXL2_ERROR_ACCESS;
+    }
+    return DXL2_ERROR_NONE;
+}
+
+static uint8_t Dynamixel2_WriteTorqueConfig(Dynamixel2Context *context,
+                                            uint16_t address,
+                                            const uint8_t *data,
+                                            uint16_t length, bool apply)
+{
+    Param *param = context->param;
+    uint32_t value_u32;
+    int32_t value_i32;
+    int16_t value_i16;
+
+    /* Live winding temperature may be refreshed while armed; model constants may not. */
+    /* 运行期可刷新绕组温度；其余模型常数仅允许停机修改。 */
+    if (address != DXL2_ADDR_MOTOR_WINDING_TEMPERATURE_C
+        && (param->OutputEnabled || context->active_command.enable
+            || context->pending_command.enable))
+    {
+        return DXL2_ERROR_ACCESS;
+    }
+
+    if (address >= DXL2_ADDR_LOW_SPEED_COMP_FORWARD_MAP
+        && address < DXL2_CONTROL_TABLE_SIZE)
+    {
+        uint16_t offset = address - DXL2_ADDR_LOW_SPEED_COMP_FORWARD_MAP;
+        uint8_t *destination = (uint8_t *)param->LowSpeedCompMap_mA;
+
+        if (length > (uint16_t)(sizeof(param->LowSpeedCompMap_mA) - offset))
+            return DXL2_ERROR_DATA_LENGTH;
+        for (uint16_t i = 0U; i < length; ++i)
+        {
+            int8_t correction = (int8_t)data[i];
+            if (correction < -LOW_SPEED_COMP_MAX_CORRECTION_MA
+                || correction > LOW_SPEED_COMP_MAX_CORRECTION_MA)
+                return DXL2_ERROR_DATA_RANGE;
+        }
+        if (apply)
+        {
+            memcpy(&destination[offset], data, length);
+        }
+        return DXL2_ERROR_NONE;
+    }
+
+    switch (address)
+    {
+    case DXL2_ADDR_LOW_SPEED_COMP_MAX_SPEED_CPS:
+        if (length != 2U) return DXL2_ERROR_DATA_LENGTH;
+        value_u32 = Dynamixel2_ReadU16(data);
+        if (value_u32 != 0U && (value_u32 < 500U || value_u32 > 5000U))
+            return DXL2_ERROR_DATA_RANGE;
+        if (apply) param->LowSpeedCompMaxSpeed_cps = (uint16_t)value_u32;
+        break;
+    case DXL2_ADDR_MOTOR_WINDING_TEMPERATURE_C:
+    case DXL2_ADDR_MOTOR_REFERENCE_TEMPERATURE_C:
+        if (length != 2U) return DXL2_ERROR_DATA_LENGTH;
+        value_i16 = (int16_t)Dynamixel2_ReadU16(data);
+        if (value_i16 < -40 || value_i16 > 200) return DXL2_ERROR_DATA_RANGE;
+        if (apply)
+        {
+            if (address == DXL2_ADDR_MOTOR_WINDING_TEMPERATURE_C)
+                param->MotorWindingTemperature_C = value_i16;
+            else
+                param->MotorTorqueParams.reference_temperature_C = value_i16;
+        }
+        break;
+    case DXL2_ADDR_TORQUE_ENCODER_COUNTS_PER_REV:
+    case DXL2_ADDR_TORQUE_CURRENT_LIMIT_MA:
+    case DXL2_ADDR_RESISTANCE_TEMP_COEFFICIENT_PPM_PER_C:
+    case DXL2_ADDR_BRUSH_DROP_MV:
+    case DXL2_ADDR_FRICTION_DEADBAND_CPS:
+    case DXL2_ADDR_MOTOR_INDUCTANCE_UH:
+    case DXL2_ADDR_CURRENT_PEAK_LIMIT_MA:
+    case DXL2_ADDR_CURRENT_ABSOLUTE_LIMIT_MA:
+    case DXL2_ADDR_STALL_CURRENT_THRESHOLD_MA:
+    case DXL2_ADDR_STALL_SPEED_THRESHOLD_CPS:
+    case DXL2_ADDR_STALL_CONFIRM_TIME_MS:
+        if (length != 2U) return DXL2_ERROR_DATA_LENGTH;
+        value_u32 = Dynamixel2_ReadU16(data);
+        if ((address == DXL2_ADDR_TORQUE_ENCODER_COUNTS_PER_REV && value_u32 == 0U)
+            || (address == DXL2_ADDR_TORQUE_CURRENT_LIMIT_MA
+                && (value_u32 == 0U || value_u32 > 30000U))
+            || (address == DXL2_ADDR_RESISTANCE_TEMP_COEFFICIENT_PPM_PER_C
+                && value_u32 > 10000U)
+            || (address == DXL2_ADDR_BRUSH_DROP_MV && value_u32 > 5000U)
+            || (address == DXL2_ADDR_MOTOR_INDUCTANCE_UH
+                && (value_u32 == 0U || value_u32 > 10000U))
+            || (address == DXL2_ADDR_CURRENT_PEAK_LIMIT_MA
+                && (value_u32 < 100U
+                    || value_u32 >= param->CurrentAbsoluteLimit_mA))
+            || (address == DXL2_ADDR_CURRENT_ABSOLUTE_LIMIT_MA
+                && (value_u32 <= param->CurrentPeakLimit_mA
+                    || value_u32 > 1830U))
+            || (address == DXL2_ADDR_STALL_CURRENT_THRESHOLD_MA
+                && (value_u32 < 50U || value_u32 > 1500U))
+            || (address == DXL2_ADDR_STALL_SPEED_THRESHOLD_CPS
+                && value_u32 < 10U)
+            || (address == DXL2_ADDR_STALL_CONFIRM_TIME_MS
+                && (value_u32 < 500U || value_u32 > 10000U)))
+        {
+            return DXL2_ERROR_DATA_RANGE;
+        }
+        if (apply)
+        {
+            if (address == DXL2_ADDR_TORQUE_ENCODER_COUNTS_PER_REV)
+                param->TorqueEncoderCountsPerRev = (uint16_t)value_u32;
+            else if (address == DXL2_ADDR_TORQUE_CURRENT_LIMIT_MA)
+                param->TorqueCurrentLimit_mA = (uint16_t)value_u32;
+            else if (address == DXL2_ADDR_RESISTANCE_TEMP_COEFFICIENT_PPM_PER_C)
+                param->MotorTorqueParams.resistance_temp_coefficient_ppm_per_C =
+                    (uint16_t)value_u32;
+            else if (address == DXL2_ADDR_BRUSH_DROP_MV)
+                param->MotorTorqueParams.brush_drop_mV = (uint16_t)value_u32;
+            else if (address == DXL2_ADDR_FRICTION_DEADBAND_CPS)
+                param->MechanicalParams.friction_deadband_cps = (uint16_t)value_u32;
+            else if (address == DXL2_ADDR_MOTOR_INDUCTANCE_UH)
+                param->MotorInductance_uH = (uint16_t)value_u32;
+            else if (address == DXL2_ADDR_CURRENT_PEAK_LIMIT_MA)
+                param->CurrentPeakLimit_mA = (uint16_t)value_u32;
+            else if (address == DXL2_ADDR_CURRENT_ABSOLUTE_LIMIT_MA)
+                param->CurrentAbsoluteLimit_mA = (uint16_t)value_u32;
+            else if (address == DXL2_ADDR_STALL_CURRENT_THRESHOLD_MA)
+                param->StallCurrentThreshold_mA = (uint16_t)value_u32;
+            else if (address == DXL2_ADDR_STALL_SPEED_THRESHOLD_CPS)
+                param->StallSpeedThreshold_cps = (uint16_t)value_u32;
+            else
+                param->StallConfirmTimeMs = (uint16_t)value_u32;
+        }
+        break;
+    case DXL2_ADDR_TORQUE_TEMP_COEFFICIENT_PPM_PER_C:
+        if (length != 4U) return DXL2_ERROR_DATA_LENGTH;
+        value_i32 = (int32_t)Dynamixel2_ReadU32(data);
+        if (value_i32 < -10000L || value_i32 > 10000L)
+            return DXL2_ERROR_DATA_RANGE;
+        if (apply)
+            param->MotorTorqueParams.torque_temp_coefficient_ppm_per_C = value_i32;
+        break;
+    case DXL2_ADDR_TORQUE_CONSTANT_UNM_PER_A:
+    case DXL2_ADDR_BACK_EMF_UV_PER_RPM:
+    case DXL2_ADDR_TERMINAL_RESISTANCE_MOHM:
+    case DXL2_ADDR_TOTAL_INERTIA_UG_CM2:
+    case DXL2_ADDR_COULOMB_FRICTION_UNM:
+    case DXL2_ADDR_VISCOUS_FRICTION_NNM_PER_RPM:
+        if (length != 4U) return DXL2_ERROR_DATA_LENGTH;
+        value_u32 = Dynamixel2_ReadU32(data);
+        if ((address == DXL2_ADDR_TORQUE_CONSTANT_UNM_PER_A
+             && (value_u32 == 0U || value_u32 > 1000000UL))
+            || (address == DXL2_ADDR_BACK_EMF_UV_PER_RPM
+                && (value_u32 == 0U || value_u32 > 10000000UL))
+            || (address == DXL2_ADDR_TERMINAL_RESISTANCE_MOHM
+                && (value_u32 == 0U || value_u32 > 10000000UL))
+            || (address == DXL2_ADDR_TOTAL_INERTIA_UG_CM2
+                && value_u32 > 100000000UL)
+            || ((address == DXL2_ADDR_COULOMB_FRICTION_UNM
+                  || address == DXL2_ADDR_VISCOUS_FRICTION_NNM_PER_RPM)
+                 && value_u32 > 10000000UL))
+        {
+            return DXL2_ERROR_DATA_RANGE;
+        }
+        if (apply)
+        {
+            if (address == DXL2_ADDR_TORQUE_CONSTANT_UNM_PER_A)
+                param->MotorTorqueParams.torque_constant_uNm_per_A = value_u32;
+            else if (address == DXL2_ADDR_BACK_EMF_UV_PER_RPM)
+                param->MotorTorqueParams.back_emf_uV_per_rpm = value_u32;
+            else if (address == DXL2_ADDR_TERMINAL_RESISTANCE_MOHM)
+                param->MotorTorqueParams.terminal_resistance_mOhm = value_u32;
+            else if (address == DXL2_ADDR_TOTAL_INERTIA_UG_CM2)
+                param->MechanicalParams.total_inertia_ug_cm2 = value_u32;
+            else if (address == DXL2_ADDR_COULOMB_FRICTION_UNM)
+                param->MechanicalParams.coulomb_friction_uNm = value_u32;
+            else
+                param->MechanicalParams.viscous_friction_nNm_per_rpm = value_u32;
+        }
+        break;
+    default:
+        return DXL2_ERROR_ACCESS;
+    }
+    return DXL2_ERROR_NONE;
+}
+
 static uint8_t Dynamixel2_WriteTable(Dynamixel2Context *context, uint16_t address,
                                      const uint8_t *data, uint16_t length, bool apply)
 {
@@ -687,6 +1228,16 @@ static uint8_t Dynamixel2_WriteTable(Dynamixel2Context *context, uint16_t addres
     if (address >= 64U && address < 111U)
     {
         return Dynamixel2_WritePid(context, address, data, length, apply);
+    }
+    if (address >= DXL2_ADDR_CRSF_POSITION_CHANNEL
+        && address < DXL2_ADDR_CRSF_STATUS)
+    {
+        return Dynamixel2_WriteCrsfConfig(context, address, data, length, apply);
+    }
+    if (address >= DXL2_ADDR_MOTOR_WINDING_TEMPERATURE_C
+        && address < DXL2_CONTROL_TABLE_SIZE)
+    {
+        return Dynamixel2_WriteTorqueConfig(context, address, data, length, apply);
     }
 
     rule = Dynamixel2_FindWriteRule(address);
@@ -1351,7 +1902,7 @@ static void Dynamixel2_ConsumeStream(Dynamixel2Context *context)
             if (context->rx_packet_count < UINT32_MAX) ++context->rx_packet_count;
             Dynamixel2_HandlePacket(context, &result.packet);
         }
-        else
+        else if (result.status != DXL2_DECODE_NO_HEADER)
         {
             if (result.status == DXL2_DECODE_BAD_CRC)
             {
@@ -1387,9 +1938,11 @@ void Dynamixel2_Init(Dynamixel2Context *context, USART_TypeDef *uart, Param *par
     context->active_command.mode = SERVO_MODE_CURRENT;
     context->active_command.enable = false;
     context->pending_command = context->active_command;
-    /* NVM never restores a live serial command: startup is disarmed and returns to PWM input. */
-    /* NVM 绝不恢复活动串口命令：上电保持未使能，并回到 PWM 输入。 */
-    param->ControlSource = CONTROL_SOURCE_PWM_INPUT;
+    /* NVM may restore the selected source, but no live command or enable state. */
+    /* NVM 可恢复控制源选择，但绝不恢复活动命令或使能状态。 */
+    if (param->ControlSource > CONTROL_SOURCE_CRSF)
+        param->ControlSource = CONTROL_SOURCE_PWM_INPUT;
+    param->CrsfManualEnable = false;
     param->NodeId = context->node_id;
     if (param->NodePosition == 0U) param->NodePosition = 1U;
     if (param->ReplySlotUs < DXL2_REPLY_SLOT_MIN_US
@@ -1398,6 +1951,16 @@ void Dynamixel2_Init(Dynamixel2Context *context, USART_TypeDef *uart, Param *par
     Dynamixel2_InitReplyTimer();
     Dynamixel2_PublishStatusSnapshot(context);
     (void)Dynamixel2_StartRx(context);
+}
+
+void Dynamixel2_SetRxObserver(Dynamixel2Context *context,
+                              Dynamixel2RxObserver observer, void *user)
+{
+    if (context != NULL)
+    {
+        context->rx_observer = observer;
+        context->rx_observer_user = user;
+    }
 }
 
 bool Dynamixel2_RestartRx(Dynamixel2Context *context)
@@ -1432,6 +1995,10 @@ void Dynamixel2_RxEventCallback(Dynamixel2Context *context, uint16_t size)
         memcpy(received, context->param->RxBuf, size);
     }
     (void)Dynamixel2_StartRx(context);
+    if (size <= sizeof(received) && context->rx_observer != NULL)
+    {
+        context->rx_observer(context->rx_observer_user, received, size);
+    }
     if (size > sizeof(received)
         || size > (uint16_t)(sizeof(context->rx_stream) - context->rx_stream_length))
     {
@@ -1626,7 +2193,7 @@ void Dynamixel2_1msTick(Dynamixel2Context *context)
 
 const ServoCommand *Dynamixel2_GetActiveCommand(const Dynamixel2Context *context)
 {
-    static const ServoCommand disabled = {SERVO_MODE_CURRENT, false, 0, 0, 0};
+    static const ServoCommand disabled = {0};
     return context != NULL ? &context->active_command : &disabled;
 }
 

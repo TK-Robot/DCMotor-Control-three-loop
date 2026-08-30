@@ -36,13 +36,13 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wall -fdata-sections -ffunction-sections")
 #   "debug_full"  : -O0 -g3, easiest source-level debug, usually too large.
 #   "debug"       : -Og -g3, usable source debugging with bounded code size.
 #   "debug_small" : -Os -g3, symbols retained but values may be optimized out.
-#   "min_size"    : -Os -g0, smallest firmware.
+#   "min_size"    : -Oz -g0, smallest firmware.
 set(TK_SIZE_PROFILE "debug")
 
 if(TK_SIZE_PROFILE STREQUAL "debug_full")
     set(TK_DEBUG_FLAGS "-O0 -g3")
 elseif(TK_SIZE_PROFILE STREQUAL "min_size")
-    set(TK_DEBUG_FLAGS "-Os -g0")
+    set(TK_DEBUG_FLAGS "-Oz -g0")
 elseif(TK_SIZE_PROFILE STREQUAL "debug_small")
     set(TK_DEBUG_FLAGS "-Os -g3")
 else()
@@ -50,13 +50,15 @@ else()
 endif()
 
 set(CMAKE_C_FLAGS_DEBUG "${TK_DEBUG_FLAGS}")
-set(CMAKE_C_FLAGS_RELEASE "-Os -g0")
+set(CMAKE_C_FLAGS_RELEASE "-Oz -g0 -flto -fno-fat-lto-objects")
 set(CMAKE_CXX_FLAGS_DEBUG "${TK_DEBUG_FLAGS}")
-set(CMAKE_CXX_FLAGS_RELEASE "-Os -g0")
+set(CMAKE_CXX_FLAGS_RELEASE "-Oz -g0 -flto -fno-fat-lto-objects")
 
 set(CMAKE_CXX_FLAGS "${CMAKE_C_FLAGS} -fno-rtti -fno-exceptions -fno-threadsafe-statics")
 
 set(CMAKE_EXE_LINKER_FLAGS "${TARGET_FLAGS}")
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -nostartfiles")
+set(CMAKE_EXE_LINKER_FLAGS_RELEASE "-flto")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -T \"${CMAKE_SOURCE_DIR}/STM32G030XX_FLASH.ld\"")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --specs=nano.specs")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-Map=${CMAKE_PROJECT_NAME}.map -Wl,--gc-sections")

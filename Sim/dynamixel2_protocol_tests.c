@@ -1,5 +1,6 @@
 #include "Dynamixel2Codec.h"
 #include "Dynamixel2ControlTable.h"
+#include "TypeDefine.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -97,7 +98,7 @@ static void test_status_and_sync_instructions(void)
 
 static void test_control_table_contract(void)
 {
-    check(DXL2_CONTROL_TABLE_SIZE == 153U, "Control Table size");
+    check(DXL2_CONTROL_TABLE_SIZE == 386U, "Control Table size");
     check(DXL2_FIXED_STATUS_RETURN_LEVEL == 2U,
           "fixed Status Return Level");
     check(DXL2_STATUS_ERROR_NONE == 0x00U
@@ -126,6 +127,40 @@ static void test_control_table_contract(void)
           "reply slot wire-time contract");
     check(DXL2_ADDR_CURRENT_TICK_MS == 122U, "Current Tick address");
     check(DXL2_ADDR_PWM_INPUT_LOW_US == 126U, "PWM input observation address");
+    check(DXL2_ADDR_ACCEL_LIMIT_CPS2 == 10U
+              && DXL2_ADDR_DECEL_LIMIT_CPS2 == 154U,
+          "scaled 16-bit acceleration and deceleration addresses");
+    check(DXL2_ADDR_POSITION_DEADBAND_COUNT == 12U,
+          "configurable position deadband address");
+    check(DXL2_ADDR_CRSF_POSITION_CHANNEL == 160U
+              && DXL2_ADDR_CRSF_WATCHDOG_MS == 188U
+              && DXL2_ADDR_CRSF_STATUS == 198U
+              && DXL2_ADDR_CRSF_CENTER_REFERENCE == 206U,
+          "CRSF configuration and status addresses");
+    check(DXL2_ADDR_TARGET_SHAFT_TORQUE_UNM == 210U
+              && DXL2_ADDR_TORQUE_MODEL_STATUS == 246U
+              && DXL2_ADDR_MOTOR_WINDING_TEMPERATURE_C == 248U
+              && DXL2_ADDR_TORQUE_CONSTANT_UNM_PER_A == 256U
+              && DXL2_ADDR_FRICTION_DEADBAND_CPS == 288U
+              && DXL2_ADDR_MOTOR_INDUCTANCE_UH == 334U
+              && DXL2_ADDR_STALL_ELAPSED_MS == 350U
+              && DXL2_ADDR_LOW_SPEED_COMP_MAX_SPEED_CPS == 352U
+              && DXL2_ADDR_LOW_SPEED_COMP_FORWARD_MAP == 354U
+              && DXL2_ADDR_LOW_SPEED_COMP_REVERSE_MAP == 370U,
+          "torque, low-speed compensation and telemetry addresses");
+    check(DXL2_TORQUE_STATUS_TORQUE_MODEL_VALID == 0x0001U
+              && DXL2_TORQUE_STATUS_ELECTRICAL_MODEL_VALID == 0x0002U
+              && DXL2_TORQUE_STATUS_MECHANICAL_MODEL_VALID == 0x0004U
+              && DXL2_TORQUE_STATUS_COMMAND_VOLTAGE_LIMITED == 0x0008U
+              && DXL2_TORQUE_STATUS_OPERATING_VOLTAGE_LIMITED == 0x0010U
+              && DXL2_TORQUE_STATUS_CONFIGURATION_FAULT == 0x0020U
+              && DXL2_TORQUE_STATUS_CURRENT_SAMPLE_VALID == 0x0040U
+              && DXL2_TORQUE_STATUS_CURRENT_ESTIMATED == 0x0080U
+              && DXL2_TORQUE_STATUS_CURRENT_SAMPLE_UNQUALIFIED == 0x0100U,
+          "torque model status bits");
+    check(SERVO_MODE_CURRENT == 0 && SERVO_MODE_SPEED == 1
+              && SERVO_MODE_POSITION == 2 && SERVO_MODE_TORQUE == 3,
+          "servo mode values remain backward compatible");
     check(DXL2_STATUS_READY == 0x0001U
               && DXL2_STATUS_PWM_INPUT_VALID == 0x0002U
               && DXL2_STATUS_OUTPUT_ENABLED == 0x0004U
@@ -136,11 +171,14 @@ static void test_control_table_contract(void)
           "Status Word low bits");
     check(DXL2_STATUS_PWM_SOURCE == 0x0100U
               && DXL2_STATUS_SERIAL_SOURCE == 0x0200U
+              && DXL2_STATUS_CRSF_SOURCE == 0x0400U
               && DXL2_STATUS_FAULT_FREE == 0x0800U
               && DXL2_STATUS_PROTOCOL_ACTIVE == 0x1000U,
           "Status Word source and health bits");
     check(DXL2_FAULT_NONE == 0x0000U
-              && DXL2_FAULT_SERIAL_WATCHDOG == 0x000AU,
+              && DXL2_FAULT_SERIAL_WATCHDOG == 0x000AU
+              && DXL2_FAULT_OVERCURRENT == 0x000BU
+              && DXL2_FAULT_STALL == 0x000CU,
           "Fault Code values");
     check(DXL2_DIAG_WATCHDOG == 5U, "Last Diagnostic values");
     check(DXL2_ENCODER_COUNTS_PER_REV == 16384L
@@ -150,7 +188,8 @@ static void test_control_table_contract(void)
           "published engineering scales");
     check(DXL2_CONTROL_ENABLE == 0x0001U
               && DXL2_CONTROL_USE_EXECUTE_TICK == 0x0002U
-              && DXL2_CONTROL_CLEAR_FAULT == 0x0004U,
+              && DXL2_CONTROL_CLEAR_FAULT == 0x0004U
+              && DXL2_CONTROL_POSITION_MULTI_TURN == 0x0008U,
           "Control Word bits");
     check(!Dynamixel2_IsExecuteTickDue(0xFFFFFFF0U, 0U),
           "zero Execute Tick remains a future wrapped instant");

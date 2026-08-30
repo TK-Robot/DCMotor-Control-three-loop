@@ -12,6 +12,7 @@
 #include "i2c.h"
 #include "TypeDefine.h"
 #include "Filter.h"
+#include "VelocityObserver.h"
 
 #define MT6701_ADDR_7BIT        0x06U              ///< 7-bit I2C address. / 7 位 I2C 地址。
 #define MT6701_ADDRESS          (MT6701_ADDR_7BIT << 1U) ///< HAL 8-bit address. / HAL 使用的 8 位地址。
@@ -29,7 +30,7 @@ typedef struct
     Param* param;               ///< Shared runtime parameters. / 共享运行参数。
     bool dma_busy;              ///< I2C DMA busy flag. / I2C DMA 忙标志。
     bool position_initialized;  ///< First corrected sample has been accepted. / 首个校正位置样本是否已建立。
-    LPF_Filter SpeedFilter;     ///< Speed low-pass filter. / 速度低通滤波器。
+    VelocityObserver Velocity;  ///< Low-speed position/velocity observer. / 低速位置速度观测器。
     LPF_Filter AccDecSpeedFilter; ///< Acceleration low-pass filter. / 加减速度低通滤波器。
 } MT6701;
 
@@ -55,6 +56,6 @@ void MT6701_CodedManage(MT6701* MT);
  * @brief Calculate encoder speed and acceleration from angle delta.
  * @brief 根据角度变化计算编码器速度和加速度。
  */
-void MT6701_SpeedUpdate(MT6701* MT, uint32_t sample_period_ms);
+void MT6701_SpeedUpdate(MT6701* MT, uint32_t sample_period_us);
 
 #endif // TRIPLE_CASCADECONTROLDCMOTOR_MT6701_H
