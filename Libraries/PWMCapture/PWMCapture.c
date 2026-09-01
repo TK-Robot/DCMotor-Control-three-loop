@@ -26,32 +26,34 @@ uint16_t PWMCapture_Calculate(CaptureData *Data, TIM_TypeDef *timer)
     {
         bool pin_high = LL_GPIO_IsInputPinSet(GPIOA, LL_GPIO_PIN_6) != 0U;
         uint16_t capture = (uint16_t)LL_TIM_IC_GetCaptureCH1(timer);
-        if (Data->EdgeNumber == 0U && pin_high && capture < 50000U)
+        if (pin_high)
         {
-            /* First rising edge marks the start of one PWM period. */
-            /* 第一次上升沿标记一个 PWM 周期的起点。 */
+            /* A rising edge always starts a new active-high command pulse. */
+            /* 每个上升沿都重新开始一次高电平有效的命令脉冲。 */
             Data->CaptureOneUpTime = capture;
             Data->EdgeNumber= 1;
         }
         else if (Data->EdgeNumber == 1U && !pin_high)
         {
-            /* Falling edge marks the end of the high-level interval. */
-            /* 下降沿标记高电平区间结束。 */
+            uint16_t high_width;
+
+            /* Unsigned subtraction also handles one 16-bit timer wrap. */
+            /* 无符号减法同时覆盖一次 16 位定时器回绕。 */
             Data->CaptureOneDownTime = capture;
-            Data->EdgeNumber= 2;
-        }
-        else if (Data->EdgeNumber == 2U && pin_high)
-        {
-            /* Second rising edge closes the period and updates the measured value. */
-            /* 第二次上升沿闭合周期并更新测量值。 */
-            Data->CaptureTwoUpTime = capture;
-            uint16_t PulseWidth =Data->CaptureTwoUpTime-Data->CaptureOneUpTime;
-            uint16_t UpWidth= Data->CaptureOneDownTime-Data->CaptureOneUpTime;
+            high_width = (uint16_t)(Data->CaptureOneDownTime
+                                    - Data->CaptureOneUpTime);
             Data->EdgeNumber= 0;
-            Data->DutyRatio = PulseWidth-UpWidth;
+            Data->DutyRatio = high_width;
             Data->SignalAgeMs = 0U;
-            Data->SignalValid = Data->DutyRatio >= PWM_INPUT_VALID_MIN_US
-                                && Data->DutyRatio <= PWM_INPUT_VALID_MAX_US;
+            if (Data->DutyRatio >= PWM_INPUT_VALID_MIN_US
+                && Data->DutyRatio <= PWM_INPUT_VALID_MAX_US)
+            {
+                Data->SignalValid = true;
+            }
+            else
+            {
+                Data->SignalValid = false;
+            }
         }
     }
     return Data->DutyRatio;
@@ -69,6 +71,7 @@ void PWMCapture_1msTick(CaptureData *Data)
     }
     if (Data->SignalAgeMs > PWM_INPUT_TIMEOUT_MS)
     {
+        Data->SignalAgeMs = UINT16_MAX;
         Data->SignalValid = false;
     }
 }

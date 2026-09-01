@@ -73,8 +73,12 @@ static int test_loop_limits(void)
     param.EncoderMultiTurnValue = 0;
     param.Pid_Pos.integral = 1234;
     param.Pid_Pos.prev_error = 56;
+    param.SpeedRef = 700;
+    param.Pid_PosVel.integral = 1234;
     CHECK(PID_PositionLoop(&param, param.PositionDeadbandCounts) == 0);
     CHECK(param.Pid_Pos.integral == 0);
+    CHECK(param.SpeedRef == 0);
+    CHECK(param.Pid_PosVel.integral == 0);
     CHECK(PID_PositionLoop(&param, param.PositionDeadbandCounts + 1) > 0);
     CHECK(PID_PositionLoop(&param, -(int32_t)param.PositionDeadbandCounts) == 0);
     CHECK(PID_PositionLoop(&param, -(int32_t)param.PositionDeadbandCounts - 1) < 0);
@@ -143,6 +147,87 @@ static int test_breakaway_uses_speed_pi_integrator(void)
     return 0;
 }
 
+static int test_low_speed_uses_same_direction_pulse_density(void)
+{
+    Param param = {0};
+    int16_t pulse = 0;
+
+    default_param(&param);
+    param.AccelMax = 1000U;
+    param.DecelMax = 1000U;
+    param.Pid_PosVel.Kp = 1000U;
+    param.Pid_PosVel.Ki = 0U;
+
+    /* The pulse floor is an actuator requirement and must not change when the
+     * separately configurable sustained-stall threshold changes. */
+    param.StallCurrentThreshold_mA = 250U;
+    for (uint8_t tick = 0U; tick < 8U && pulse == 0; ++tick)
+        pulse = PID_SpeedLoop(&param, 100, 1U);
+    CHECK(param.EncoderSpeedExpect == 100);
+    CHECK(pulse == (int16_t)SPEED_LOW_CURRENT_PULSE_MA);
+    CHECK(param.ExpectMA == (int16_t)SPEED_LOW_CURRENT_PULSE_MA);
+
+    /* Crawl-speed overspeed must coast instead of repeatedly loading the
+     * opposite gearbox tooth face. */
+    param.EncoderSpeed = 500;
+    param.Pid_PosVel.integral = 500000;
+    CHECK(PID_SpeedLoop(&param, 100, 1U) == 0);
+    CHECK(param.Pid_PosVel.integral <= 0);
+    CHECK(param.target_speed == 0);
+
+    /* The measured 1000 cps failure case is inside the pulse-density band. */
+    PID_Reset(&param.Pid_PosVel);
+    param.SpeedRef = 1000;
+    param.EncoderSpeed = 0;
+    param.Pid_PosVel.Kp = 100U;
+    pulse = 0;
+    for (uint8_t tick = 0U; tick < 8U && pulse == 0; ++tick)
+        pulse = PID_SpeedLoop(&param, 1000, 1U);
+    CHECK(pulse == (int16_t)SPEED_LOW_CURRENT_PULSE_MA);
+    param.EncoderSpeed = 1500;
+    CHECK(PID_SpeedLoop(&param, 1000, 1U) == 0);
+    param.EncoderSpeed = 3000;
+    CHECK(PID_SpeedLoop(&param, 1000, 1U) < 0);
+
+    PID_Reset(&param.Pid_PosVel);
+    param.SpeedRef = 3000;
+    param.EncoderSpeed = 0;
+    pulse = 0;
+    for (uint8_t tick = 0U; tick < 8U && pulse == 0; ++tick)
+        pulse = PID_SpeedLoop(&param, 3000, 1U);
+    CHECK(pulse == (int16_t)SPEED_LOW_CURRENT_PULSE_MA);
+    param.EncoderSpeed = 3500;
+    CHECK(PID_SpeedLoop(&param, 3000, 1U) == 0);
+    param.EncoderSpeed = 4500;
+    CHECK(PID_SpeedLoop(&param, 3000, 1U) < 0);
+
+    /* Above the crawl band, active regenerative braking remains available. */
+    PID_Reset(&param.Pid_PosVel);
+    param.SpeedRef = 4000;
+    param.EncoderSpeed = 4500;
+    CHECK(PID_SpeedLoop(&param, 4000, 1U) < 0);
+
+    PID_Reset(&param.Pid_PosVel);
+    param.SpeedRef = 0;
+    param.target_speed = 0;
+    param.Pid_PosVel.Kp = 1000U;
+    param.EncoderSpeed = 0;
+    pulse = 0;
+    for (uint8_t tick = 0U; tick < 8U && pulse == 0; ++tick)
+        pulse = PID_SpeedLoop(&param, -100, 1U);
+    CHECK(pulse == -(int16_t)SPEED_LOW_CURRENT_PULSE_MA);
+    CHECK(param.EncoderSpeedExpect < 0);
+    CHECK(param.ExpectMA == -(int16_t)SPEED_LOW_CURRENT_PULSE_MA);
+
+    /* The quantizer must respect a lower mode-specific current ceiling. */
+    PID_Reset(&param.Pid_PosVel);
+    param.SpeedRef = 0;
+    param.target_speed = 0;
+    (void)PID_SpeedTorqueLoop(&param, 100, 1U, 80U, NULL);
+    CHECK(param.ExpectMA == 80);
+    return 0;
+}
+
 static int test_model_fed_low_current_loop(void)
 {
     Param param = {0};
@@ -188,14 +273,14 @@ static int test_model_fed_low_current_loop(void)
 
     param.INA181_mA = 1501;
     param.CurrentAverage_mA = 1501;
-    CHECK(PID_CurrentLoop(&param, 100) == 0);
+    CHECK(PID_CurrentLoop(&param, 100) == 32);
 
     param.INA181_mA = 1501;
-    CHECK(PID_CurrentLoop(&param, 1000) < 323);
+    CHECK(PID_CurrentLoop(&param, 1000) == 323);
     return 0;
 }
 
-static int test_observable_current_voltage_trim(void)
+static int test_active_window_peak_never_trims_average_model(void)
 {
     Param param = {0};
     int16_t model_pwm;
@@ -208,51 +293,32 @@ static int test_observable_current_voltage_trim(void)
     param.INA181_mA = 500;
     param.CurrentAverage_mA = 500;
 
-    /* A new direction and two stable 1 ms feedback updates use model-only
-     * output before the correction is allowed to enter bumplessly. */
+    /* The shunt value is an active-window peak in every decay mode. Repeated
+     * qualified samples must not alter average-current model voltage. */
     model_pwm = PID_CurrentLoop(&param, 700);
     CHECK(model_pwm == 226);
-    CHECK(PID_CurrentLoop(&param, 700) == 226);
-    CHECK(PID_CurrentLoop(&param, 700) == 226);
-    CHECK(PID_CurrentLoop(&param, 700) > 226);
-    CHECK(param.Pid_PosEle.integral > 0);
+    for (int cycle = 0; cycle < 8; ++cycle)
+    {
+        param.CurrentAverage_mA = (cycle & 1) ? 50 : 1500;
+        CHECK(PID_CurrentLoop(&param, 700) == 226);
+        CHECK(param.CurrentCorrectionPwm == 0);
+        CHECK(param.Pid_PosEle.integral == 0);
+        CHECK(param.Pid_PosEle.prev_feedback == 0);
+        CHECK((param.CurrentLoopStatus & 0x0001U) == 0U);
+        CHECK((param.CurrentLoopStatus & 0x0008U) != 0U);
+    }
 
-    /* A commanded direction change clears the correction before the existing
-     * PWM-layer coast interval performs the physical bridge reversal. */
+    param.DriveRunMode = 3U;
+    param.CurrentEstimated = false;
+    param.CurrentSampleValid = true;
+    param.CurrentSampleAgeMs = 0U;
+    CHECK(PID_CurrentLoop(&param, 700) == 226);
+    CHECK(param.CurrentCorrectionPwm == 0);
+
+    /* Direction changes still reset stale PI state before bridge reversal. */
     CHECK(PID_CurrentLoop(&param, -700) == -226);
     CHECK(param.Pid_PosEle.integral == 0);
     CHECK(param.Pid_PosEle.prev_feedback == 0);
-
-    param.DrivePower = 226;
-    param.INA181_mA = 500;
-    param.CurrentAverage_mA = 500;
-    CHECK(PID_CurrentLoop(&param, 700) == 226);
-    CHECK(PID_CurrentLoop(&param, 700) == 226);
-    CHECK(PID_CurrentLoop(&param, 700) == 226);
-    CHECK(PID_CurrentLoop(&param, 700) > 226);
-
-    /* Missing measurements freeze the integrator and return to the R/Ke
-     * model instead of applying stale feedback correction. */
-    {
-        int32_t saved_integral = param.Pid_PosEle.integral;
-        param.CurrentSampleValid = false;
-        param.CurrentSampleAgeMs = 4U;
-        param.CurrentAverage_mA = 0;
-        CHECK(PID_CurrentLoop(&param, 700) == 226);
-        CHECK(param.Pid_PosEle.integral == saved_integral);
-
-        /* Reacquiring the same-direction sample only rearms feedback. The
-         * integrator was frozen, so it must not be cleared and restarted. */
-        param.CurrentSampleValid = true;
-        param.CurrentSampleAgeMs = 0U;
-        param.CurrentAverage_mA = 500;
-        CHECK(PID_CurrentLoop(&param, 700) == 226);
-        CHECK(param.Pid_PosEle.integral == saved_integral);
-        CHECK(PID_CurrentLoop(&param, 700) == 226);
-        CHECK(param.Pid_PosEle.integral == saved_integral);
-        CHECK(PID_CurrentLoop(&param, 700) > 226);
-        CHECK(param.Pid_PosEle.integral > saved_integral);
-    }
 
     /* At regenerative operating points the ground shunt cannot verify signed
      * current. The model supplies a bounded brake/coast duty while PI freezes. */
@@ -281,30 +347,6 @@ static int test_observable_current_voltage_trim(void)
     CHECK(PID_CurrentLoop(&param, -100) < 0);
     CHECK((param.CurrentLoopStatus & 0x0080U) == 0U);
 
-    /* Legacy/custom values outside the new safe envelope cannot silently
-     * activate a feedback loop after a firmware update. */
-    param.DrivePower = 226;
-    param.Pid_PosEle.Kd = 1U;
-    PID_MigrateLegacyCurrentTuning(&param);
-    CHECK(param.Pid_PosEle.Kp == 250U);
-    CHECK(param.Pid_PosEle.Ki == 30U);
-    CHECK(param.Pid_PosEle.Kd == 0U);
-    CHECK(param.Pid_PosEle.integral == 0);
-
-    /* PI correction has its own mV saturation and anti-windup boundary. */
-    {
-        PID_Int pi = {
-            .Kp = 1000U,
-            .Ki = 1000U,
-            .integral_max = 8000,
-            .out_max = 100U
-        };
-        int32_t correction = 0;
-        for (int cycle = 0; cycle < 20; ++cycle)
-            correction = PID_AbsCalculate(&pi, 500, 0);
-        CHECK(correction == 100);
-        CHECK(pi.integral == 0);
-    }
     return 0;
 }
 
@@ -325,11 +367,11 @@ static int test_legacy_current_tuning_migration(void)
     PID_MigrateLegacyCurrentTuning(&param);
     CHECK(param.Pid_Pos.out_max == 30000U);
     CHECK(param.Pid_Pos.Kd == 0U);
-    CHECK(param.Pid_PosEle.Kp == 250U);
-    CHECK(param.Pid_PosEle.Ki == 30U);
-    CHECK(param.Pid_PosEle.out_min == 0U);
-    CHECK(param.Pid_PosEle.out_max == 500U);
-    CHECK(param.Pid_PosEle.integral_max == 16000);
+    CHECK(param.Pid_PosEle.Kp == 3200U);
+    CHECK(param.Pid_PosEle.Ki == 420U);
+    CHECK(param.Pid_PosEle.out_min == 5U);
+    CHECK(param.Pid_PosEle.out_max == 750U);
+    CHECK(param.Pid_PosEle.integral_max == 8000);
     CHECK(param.Pid_PosVel.Ki == 15U);
     CHECK(param.Pid_PosVel.Kd == 0U);
     CHECK(param.Pid_PosVel.out_min == 0U);
@@ -355,11 +397,12 @@ static int test_legacy_current_tuning_migration(void)
     param.Pid_PosVel.out_max = 400U;
     param.Pid_PosVel.out_min = 0U;
     PID_MigrateLegacyCurrentTuning(&param);
-    CHECK(param.Pid_PosVel.Kp == 80U);
-    CHECK(param.Pid_PosVel.Ki == 5U);
+    CHECK(param.Pid_PosVel.Kp == 120U);
+    CHECK(param.Pid_PosVel.Ki == 10U);
 
-    /* Increase only the known legacy integral ceiling. Keep a user's valid
-     * custom current-loop tuning unchanged. */
+    /* The one-sided peak sampler cannot close an average-current PI, so its
+     * dormant tuning is preserved instead of spending runtime code migrating
+     * values which do not participate in the actuator command. */
     param.Pid_PosEle.Kp = 250U;
     param.Pid_PosEle.Ki = 30U;
     param.Pid_PosEle.Kd = 0U;
@@ -367,7 +410,7 @@ static int test_legacy_current_tuning_migration(void)
     param.Pid_PosEle.out_max = 500U;
     param.Pid_PosEle.integral_max = 8000;
     PID_MigrateLegacyCurrentTuning(&param);
-    CHECK(param.Pid_PosEle.integral_max == 16000);
+    CHECK(param.Pid_PosEle.integral_max == 8000);
 
     param.Pid_PosEle.Kp = 200U;
     param.Pid_PosEle.Ki = 25U;
@@ -407,9 +450,13 @@ static int test_speed_plan_uses_scaled_limits(void)
     param.SpeedRef = 1000;
     CHECK(SpeedPlan_Update(&param, 0, 1U) == 700);
     param.SpeedRef = -1000;
-    CHECK(SpeedPlan_Update(&param, -5000, 1U) == -1300);
+    CHECK(SpeedPlan_Update(&param, -5000, 1U) == -1200);
     param.SpeedRef = -1000;
-    CHECK(SpeedPlan_Update(&param, 0, 1U) == -800);
+    CHECK(SpeedPlan_Update(&param, 0, 1U) == -700);
+
+    param.SpeedRef = 100;
+    CHECK(SpeedPlan_Update(&param, -5000, 1U) == 0);
+    CHECK(SpeedPlan_Update(&param, -5000, 1U) == -200);
 
     param.SpeedRef = 0;
     param.AccelMax = UINT16_MAX;
@@ -688,7 +735,7 @@ static int test_speed_integral_adapts_breakaway_load(void)
     return 0;
 }
 
-static int test_low_speed_phase_compensation_is_bounded_and_directional(void)
+static int test_output_phase_map_does_not_modify_control(void)
 {
     Param baseline = {0};
     Param compensated = {0};
@@ -707,8 +754,8 @@ static int test_low_speed_phase_compensation_is_bounded_and_directional(void)
     command.mode = SERVO_MODE_SPEED;
     command.enable = true;
     command.target_speed = 1500;
-    baseline.EncoderValue = 512U;
-    compensated.EncoderValue = 512U;
+    baseline.EncoderValue = 256U;
+    compensated.EncoderValue = 256U;
     ServoControl_Init(&baseline_servo, &baseline);
     ServoControl_Init(&compensated_servo, &compensated);
     ServoControl_SetCommand(&baseline_servo, &command);
@@ -717,7 +764,7 @@ static int test_low_speed_phase_compensation_is_bounded_and_directional(void)
     ServoControl_Run1ms(&baseline_servo);
     ServoControl_Begin1ms(&compensated_servo);
     ServoControl_Run1ms(&compensated_servo);
-    CHECK(compensated.ExpectMA == baseline.ExpectMA + 30);
+    CHECK(compensated.ExpectMA == baseline.ExpectMA);
 
     default_param(&baseline);
     default_param(&compensated);
@@ -725,8 +772,8 @@ static int test_low_speed_phase_compensation_is_bounded_and_directional(void)
     compensated.LowSpeedCompMap_mA[1][1] = 10;
     compensated.LowSpeedCompMap_mA[1][2] = 30;
     command.target_speed = -1500;
-    baseline.EncoderValue = 1536U;
-    compensated.EncoderValue = 1536U;
+    baseline.EncoderValue = 768U;
+    compensated.EncoderValue = 768U;
     ServoControl_Init(&baseline_servo, &baseline);
     ServoControl_Init(&compensated_servo, &compensated);
     ServoControl_SetCommand(&baseline_servo, &command);
@@ -735,10 +782,11 @@ static int test_low_speed_phase_compensation_is_bounded_and_directional(void)
     ServoControl_Run1ms(&baseline_servo);
     ServoControl_Begin1ms(&compensated_servo);
     ServoControl_Run1ms(&compensated_servo);
-    CHECK(compensated.ExpectMA == baseline.ExpectMA - 20);
+    CHECK(compensated.ExpectMA == baseline.ExpectMA);
 
     compensated.SpeedRef = 3000;
-    command.target_speed = 3000;
+    compensated.EncoderSpeed = 3000;
+    command.target_speed = 4000;
     ServoControl_SetCommand(&compensated_servo, &command);
     ServoControl_Begin1ms(&compensated_servo);
     ServoControl_Run1ms(&compensated_servo);
@@ -746,7 +794,40 @@ static int test_low_speed_phase_compensation_is_bounded_and_directional(void)
     return 0;
 }
 
-static int test_velocity_overspeed_coasts_but_reversal_remains_active(void)
+static int test_physical_reversal_waits_for_load_speed_zero(void)
+{
+    Param param = {0};
+
+    default_param(&param);
+    param.DecelMax = 300U;
+    param.AccelMax = 200U;
+    param.SpeedRef = 600;
+    param.EncoderSpeed = 1200;
+    param.Pid_PosVel.integral = 400000;
+
+    (void)PID_SpeedLoop(&param, -5000, 1U);
+    CHECK(param.SpeedRef == 300);
+    CHECK(param.Pid_PosVel.integral == 0);
+    (void)PID_SpeedLoop(&param, -5000, 1U);
+    CHECK(param.SpeedRef == 0);
+    CHECK(param.Pid_PosVel.integral == 0);
+
+    /* The planned reference stays at zero while the output shaft is still
+     * moving on the old tooth face. */
+    (void)PID_SpeedLoop(&param, -5000, 1U);
+    CHECK(param.SpeedRef == 0);
+    CHECK(param.Pid_PosVel.integral == 0);
+
+    /* Once measured speed enters the existing stall/zero-speed window, the
+     * opposite reference starts from zero instead of a preloaded integrator. */
+    param.EncoderSpeed = 300;
+    (void)PID_SpeedLoop(&param, -5000, 1U);
+    CHECK(param.SpeedRef == -200);
+    CHECK(param.Pid_PosVel.integral < 0);
+    return 0;
+}
+
+static int test_velocity_overspeed_brakes_and_reversal_remains_active(void)
 {
     Param param = {0};
     ServoControl servo;
@@ -765,8 +846,9 @@ static int test_velocity_overspeed_coasts_but_reversal_remains_active(void)
     param.Pid_PosVel.integral = 12345;
     ServoControl_Begin1ms(&servo);
     ServoControl_Run1ms(&servo);
-    CHECK(param.ExpectMA == 0);
-    CHECK(param.DrivePower == 0);
+    CHECK(param.ExpectMA < 0);
+    CHECK(param.DrivePower < 0);
+    CHECK((param.CurrentLoopStatus & 0x0080U) != 0U);
 
     command.target_speed = -5000;
     ServoControl_SetCommand(&servo, &command);
@@ -990,7 +1072,7 @@ static int test_invalid_torque_model_inhibits_output(void)
     return 0;
 }
 
-static int test_cycle_overcurrent_latches_fault(void)
+static int test_cycle_overcurrent_does_not_latch_fault(void)
 {
     Param param = {0};
     ServoControl servo;
@@ -1006,20 +1088,118 @@ static int test_cycle_overcurrent_latches_fault(void)
     ServoControl_Begin1ms(&servo);
     ServoControl_Run1ms(&servo);
 
+    CHECK(param.OutputEnabled);
+    CHECK((param.ProtectionFlags & PROTECTION_OVERCURRENT) == 0U);
+    CHECK(param.FaultCode == 0U);
+    return 0;
+}
+
+static int test_sustained_overcurrent_stops_then_recovers(void)
+{
+    Param param = {0};
+    ServoControl servo;
+    ServoCommand command = {0};
+
+    default_param(&param);
+    param.CurrentPeakLimit_mA = 1500U;
+    param.StallConfirmTimeMs = 3U;
+    param.CurrentAverage_mA = 1600;
+    param.ControlSource = CONTROL_SOURCE_PWM_INPUT;
+    command.mode = SERVO_MODE_CURRENT;
+    command.enable = true;
+    command.target_current_mA = 100;
+    ServoControl_Init(&servo, &param);
+    ServoControl_SetCommand(&servo, &command);
+
+    for (uint8_t tick = 0U; tick < 2U; ++tick)
+    {
+        ServoControl_Begin1ms(&servo);
+        ServoControl_Run1ms(&servo);
+        CHECK(param.FaultCode == 0U);
+        CHECK(param.OutputEnabled);
+    }
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK(param.FaultCode == 0U);
     CHECK(!param.OutputEnabled);
     CHECK((param.ProtectionFlags & PROTECTION_OVERCURRENT) != 0U);
-    CHECK(param.FaultCode == SERVO_FAULT_OVERCURRENT);
 
-    /* The fast actuator latch is reset later by the main loop, but the fault
-     * code must continue to inhibit an otherwise still-enabled command. */
-    param.CurrentHardLimitActive = false;
+    param.CurrentAverage_mA = 0;
+    for (uint8_t tick = 0U; tick < 3U; ++tick)
+    {
+        ServoControl_Begin1ms(&servo);
+        ServoControl_Run1ms(&servo);
+        CHECK(param.FaultCode == 0U);
+        CHECK(!param.OutputEnabled);
+        CHECK((param.ProtectionFlags & PROTECTION_OVERCURRENT) != 0U);
+    }
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK(param.FaultCode == 0U);
+    CHECK(param.OutputEnabled);
+    CHECK((param.ProtectionFlags & PROTECTION_OVERCURRENT) == 0U);
+
+    default_param(&param);
+    param.CurrentPeakLimit_mA = 1500U;
+    param.StallConfirmTimeMs = 2U;
+    param.CurrentAverage_mA = 1600;
+    param.ControlSource = CONTROL_SOURCE_SERIAL;
+    command.enable = true;
+    ServoControl_Init(&servo, &param);
+    ServoControl_SetCommand(&servo, &command);
+    for (uint8_t tick = 0U; tick < 2U; ++tick)
+    {
+        ServoControl_Begin1ms(&servo);
+        ServoControl_Run1ms(&servo);
+    }
+    CHECK(param.FaultCode == 0U);
+    CHECK(!param.OutputEnabled);
+    param.CurrentAverage_mA = 0;
     ServoControl_Begin1ms(&servo);
     ServoControl_Run1ms(&servo);
     CHECK(!param.OutputEnabled);
-    CHECK(param.DrivePower == 0);
-    CHECK(param.DriveRunMode == 0U);
     CHECK((param.ProtectionFlags & PROTECTION_OVERCURRENT) != 0U);
-    CHECK(param.FaultCode == SERVO_FAULT_OVERCURRENT);
+
+    command.enable = false;
+    ServoControl_SetCommand(&servo, &command);
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    command.enable = true;
+    ServoControl_SetCommand(&servo, &command);
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK(param.FaultCode == 0U);
+    CHECK(param.OutputEnabled);
+    CHECK((param.ProtectionFlags & PROTECTION_OVERCURRENT) == 0U);
+
+    default_param(&param);
+    param.CurrentPeakLimit_mA = 1500U;
+    param.StallConfirmTimeMs = 2U;
+    param.CurrentAverage_mA = 1600;
+    param.ControlSource = CONTROL_SOURCE_CRSF;
+    command.enable = true;
+    ServoControl_Init(&servo, &param);
+    ServoControl_SetCommand(&servo, &command);
+    for (uint8_t tick = 0U; tick < 2U; ++tick)
+    {
+        ServoControl_Begin1ms(&servo);
+        ServoControl_Run1ms(&servo);
+    }
+    CHECK(!param.OutputEnabled);
+    CHECK(param.FaultCode == 0U);
+    param.CurrentAverage_mA = 0;
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK(!param.OutputEnabled);
+    command.enable = false;
+    ServoControl_SetCommand(&servo, &command);
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    command.enable = true;
+    ServoControl_SetCommand(&servo, &command);
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK(param.OutputEnabled);
     return 0;
 }
 
@@ -1167,7 +1347,7 @@ static int test_dynamic_speed_and_position_convergence(void)
                (long)param.EncoderSpeed, param.ExpectMA,
                (long)param.Pid_PosVel.integral);
     CHECK(abs(param.EncoderSpeed + 3000) < 250);
-    CHECK(param.ExpectMA < 0);
+    CHECK(param.ExpectMA <= 0);
 
     command.mode = SERVO_MODE_POSITION;
     command.position_multi_turn = true;
@@ -1237,13 +1417,41 @@ static int test_single_and_multi_turn_position_targets(void)
     return 0;
 }
 
+static int test_diagnostic_pwm_duty_is_direct_and_protected(void)
+{
+    Param param = {0};
+    ServoControl servo;
+    ServoCommand command = {0};
+
+    default_param(&param);
+    ServoControl_Init(&servo, &param);
+    command.mode = SERVO_MODE_PWM_DUTY;
+    command.enable = true;
+    command.target_current_mA = 375;
+    ServoControl_SetCommand(&servo, &command);
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK(param.OutputEnabled);
+    CHECK(param.DrivePower == 375);
+    CHECK(param.ExpectMA == 375);
+
+    param.EncoderFeedbackValid = false;
+    ServoControl_Begin1ms(&servo);
+    ServoControl_Run1ms(&servo);
+    CHECK(!param.OutputEnabled);
+    CHECK(param.DrivePower == 0);
+    CHECK(param.FaultCode == SERVO_FAULT_ENCODER);
+    return 0;
+}
+
 int main(void)
 {
     CHECK(test_pid_reset() == 0);
     CHECK(test_loop_limits() == 0);
     CHECK(test_breakaway_uses_speed_pi_integrator() == 0);
+    CHECK(test_low_speed_uses_same_direction_pulse_density() == 0);
     CHECK(test_model_fed_low_current_loop() == 0);
-    CHECK(test_observable_current_voltage_trim() == 0);
+    CHECK(test_active_window_peak_never_trims_average_model() == 0);
     CHECK(test_legacy_current_tuning_migration() == 0);
     CHECK(test_position_derivative_uses_speed_units() == 0);
     CHECK(test_speed_plan_uses_scaled_limits() == 0);
@@ -1254,19 +1462,22 @@ int main(void)
     CHECK(test_speed_and_position_cascades() == 0);
     CHECK(test_model_assisted_speed_cascade() == 0);
     CHECK(test_speed_integral_adapts_breakaway_load() == 0);
-    CHECK(test_low_speed_phase_compensation_is_bounded_and_directional() == 0);
-    CHECK(test_velocity_overspeed_coasts_but_reversal_remains_active() == 0);
+    CHECK(test_output_phase_map_does_not_modify_control() == 0);
+    CHECK(test_physical_reversal_waits_for_load_speed_zero() == 0);
+    CHECK(test_velocity_overspeed_brakes_and_reversal_remains_active() == 0);
     CHECK(test_mixed_decay_is_delegated_to_pwm_loop() == 0);
     CHECK(test_current_mode_speed_limit() == 0);
     CHECK(test_torque_mode_and_voltage_limit() == 0);
     CHECK(test_speed_loop_uses_effective_current_limit() == 0);
     CHECK(test_stale_encoder_inhibits_closed_motion() == 0);
     CHECK(test_invalid_torque_model_inhibits_output() == 0);
-    CHECK(test_cycle_overcurrent_latches_fault() == 0);
+    CHECK(test_cycle_overcurrent_does_not_latch_fault() == 0);
+    CHECK(test_sustained_overcurrent_stops_then_recovers() == 0);
     CHECK(test_disarmed_command_does_not_relatch_stale_overcurrent() == 0);
     CHECK(test_stall_is_delayed_and_closed_motion_only() == 0);
     CHECK(test_dynamic_speed_and_position_convergence() == 0);
     CHECK(test_single_and_multi_turn_position_targets() == 0);
+    CHECK(test_diagnostic_pwm_duty_is_direct_and_protected() == 0);
     printf("PASS\n");
     return 0;
 }

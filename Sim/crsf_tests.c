@@ -56,6 +56,7 @@ static void init_control_param(Param *param)
     param->CrsfWatchdogMs = 100U;
     param->CrsfNegativePositionLimit = 0;
     param->CrsfPositivePositionLimit = 16383;
+    param->CrsfCenterReference = 8191;
     param->EncoderMultiTurnValue = 5000;
 }
 
@@ -114,6 +115,7 @@ static void test_enable_channel_arms_and_watchdog_disables(void)
     uint16_t tick;
 
     init_control_param(&param);
+    param.EncoderMultiTurnValue = 8191;
     channels[0] = 992U;
     channels[1] = 1300U;
     Crsf_Init(&context, &param);
@@ -122,7 +124,9 @@ static void test_enable_channel_arms_and_watchdog_disables(void)
     Crsf_1msTick(&context);
     assert(Crsf_GetActiveCommand(&context)->enable);
     assert(context.control_state == CRSF_CONTROL_ACTIVE);
-    assert(Crsf_GetActiveCommand(&context)->target_position == 5000);
+    assert(Crsf_GetActiveCommand(&context)->target_position == 8191);
+    assert(Crsf_GetActiveCommand(&context)->current_limit_mA == 300U);
+    assert(Crsf_GetActiveCommand(&context)->speed_limit_cps == 5000U);
     assert((param.CrsfStatus & CRSF_STATUS_ACTIVE) != 0U);
 
     for (tick = 0U; tick <= param.CrsfWatchdogMs; ++tick)
@@ -221,6 +225,7 @@ static void test_auto_enable_false_requires_low_then_rising_edge(void)
     uint16_t channels[CRSF_CHANNEL_COUNT] = {0U};
 
     init_control_param(&param);
+    param.EncoderMultiTurnValue = 8191;
     param.CrsfAutoEnable = false;
     channels[0] = 992U;
     channels[1] = 1200U;
@@ -336,6 +341,46 @@ static void test_arm_target_is_frozen_until_active(void)
     assert(Crsf_GetActiveCommand(&context)->target_position == 10000);
 }
 
+static void test_configured_midpoint_maps_full_position_range(void)
+{
+    CrsfContext context;
+    Param param;
+    uint8_t frame[26];
+    uint16_t channels[CRSF_CHANNEL_COUNT] = {0U};
+
+    init_control_param(&param);
+    param.CrsfNegativePositionLimit = 500;
+    param.CrsfPositivePositionLimit = 16200;
+    param.CrsfCenterReference = 8350;
+    param.EncoderMultiTurnValue = 8350;
+    channels[0] = 992U;
+    channels[1] = 1457U;
+    Crsf_Init(&context, &param);
+    context.center_reference_valid = false;
+
+    (void)build_frame(frame, channels);
+    Crsf_ProcessBytes(&context, frame, sizeof(frame));
+    Crsf_1msTick(&context);
+
+    assert(context.control_state == CRSF_CONTROL_ACTIVE);
+    assert(Crsf_GetActiveCommand(&context)->enable);
+    assert(Crsf_GetActiveCommand(&context)->target_position == 8350);
+    assert(Crsf_GetActiveCommand(&context)->current_limit_mA == 300U);
+    assert(Crsf_GetActiveCommand(&context)->speed_limit_cps == 5000U);
+
+    channels[0] = 1811U;
+    (void)build_frame(frame, channels);
+    Crsf_ProcessBytes(&context, frame, sizeof(frame));
+    Crsf_1msTick(&context);
+    assert(Crsf_GetActiveCommand(&context)->target_position == 16200);
+
+    channels[0] = 172U;
+    (void)build_frame(frame, channels);
+    Crsf_ProcessBytes(&context, frame, sizeof(frame));
+    Crsf_1msTick(&context);
+    assert(Crsf_GetActiveCommand(&context)->target_position == 500);
+}
+
 int main(void)
 {
     test_split_frame_decodes_all_channels();
@@ -348,6 +393,7 @@ int main(void)
     test_position_channel_zero_disables_control();
     test_center_trigger_requires_low_to_high_edge();
     test_arm_target_is_frozen_until_active();
+    test_configured_midpoint_maps_full_position_range();
     puts("crsf_tests: PASS");
     return 0;
 }

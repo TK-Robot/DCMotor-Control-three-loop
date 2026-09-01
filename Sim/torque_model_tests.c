@@ -105,20 +105,46 @@ static int test_current_feedforward_model(void)
     CHECK(duty == -143);
     CHECK(MotorTorqueModel_DutyToCurrent(
               &params, duty, 5000U, -16384, 16384U, 25, &valid) == -100);
+
+    /* At voltage saturation, the current inferred from actual duty must be
+     * lower than the unreachable request instead of echoing that request. */
+    duty = MotorTorqueModel_CurrentToDutyPermille(
+        &params, 2000, 5000U, 16384, 16384U, 25, &valid);
+    CHECK(valid);
+    CHECK(duty == 1000);
+    current = MotorTorqueModel_DutyToCurrent(
+        &params, duty, 5000U, 16384, 16384U, 25, &valid);
+    CHECK(valid);
+    CHECK(current >= 1716 && current <= 1718);
     return 0;
 }
 
 static int test_pwm_current_sampling_model(void)
 {
-    CHECK(CurrentSenseModel_DutyTicks(1249U, 100) == 125U);
-    CHECK(CurrentSenseModel_TriggerCompare(1249U, 100, 2U) == 625U);
-    CHECK(CurrentSenseModel_TriggerCompare(1249U, 100, 3U) == 625U);
-    CHECK(CurrentSenseModel_IsSampleValid(1, 2U));
-    CHECK(CurrentSenseModel_IsSampleValid(1, 3U));
-    CHECK(!CurrentSenseModel_IsSampleValid(100, 1U));
-    CHECK(CurrentSenseModel_CanEstimateFromAverageDuty(2U));
-    CHECK(!CurrentSenseModel_CanEstimateFromAverageDuty(3U));
+    CHECK(CurrentSenseModel_DutyTicks(1249U, 70) == 87U);
+    CHECK(CurrentSenseModel_TriggerCompare(1249U, 87U, 2U) == 625U);
+    CHECK(CurrentSenseModel_TriggerCompare(1249U, 87U, 3U) == 625U);
+    CHECK(!CurrentSenseModel_IsSampleValid(1249U, 70, 2U));
+    CHECK(!CurrentSenseModel_IsSampleValid(1249U, 70, 3U));
+
+    /* An 88-tick active window is the first one that contains 64 ticks of
+     * edge blanking, both sample-and-hold phases (16 ticks), and an 8-tick
+     * trailing guard. The final conversion may finish after the drive edge. */
+    CHECK(CurrentSenseModel_DutyTicks(1249U, 71) == 88U);
+    CHECK(CurrentSenseModel_TriggerCompare(1249U, 88U, 2U) == 1226U);
+    CHECK(CurrentSenseModel_TriggerCompare(1249U, 88U, 3U) == 64U);
+    CHECK(CurrentSenseModel_IsSampleValid(1249U, 71, 2U));
+    CHECK(CurrentSenseModel_IsSampleValid(1249U, -71, 3U));
+    CHECK(CurrentSenseModel_TriggerCompare(1249U, 1000U, 2U) == 1226U);
+    CHECK(CurrentSenseModel_TriggerCompare(1249U, 1000U, 3U) == 976U);
+    CHECK(!CurrentSenseModel_IsSampleValid(1249U, 800, 1U));
+    CHECK(!CurrentSenseModel_IsSampleValid(1999U, 800, 2U));
+    CHECK(CurrentSenseModel_CanEstimateFromAverageDuty(2U, false));
+    CHECK(!CurrentSenseModel_CanEstimateFromAverageDuty(2U, true));
+    CHECK(!CurrentSenseModel_CanEstimateFromAverageDuty(1U, false));
+    CHECK(!CurrentSenseModel_CanEstimateFromAverageDuty(3U, false));
     CHECK(CurrentSenseModel_AdcToMilliamp(233U, 10U, 1504U) == 100);
+    CHECK(CurrentSenseModel_AdcToMilliamp(466U, 20U, 3008U) == 100);
     return 0;
 }
 
@@ -209,15 +235,19 @@ static int test_sds1601_8v4_datasheet_calibration(void)
     CHECK(external_stall_torque_uNm >= 734000);
     CHECK(external_stall_torque_uNm <= 737000);
 
-    /* The equivalent no-load model must cross each rounded nameplate point
-     * within 0.10 V, including fixed-point and datasheet rounding. */
+    /* Nameplate travel times include the vendor servo controller and are only
+     * a broad sanity bound.  The direct 8.2 V PWM sweep measured about 145 rpm,
+     * so the fitted Ke/friction model takes precedence over those rounded
+     * values while remaining within 0.60 V of every nameplate point. */
     for (i = 0U; i < sizeof(voltages_mV) / sizeof(voltages_mV[0]); ++i)
     {
         CHECK(sds1601_no_load_voltage_at_rpm(expected_rpm[i])
-              <= voltages_mV[i] + 100U);
-        CHECK(sds1601_no_load_voltage_at_rpm(expected_rpm[i]) + 100U
+              <= voltages_mV[i] + 600U);
+        CHECK(sds1601_no_load_voltage_at_rpm(expected_rpm[i]) + 600U
               >= voltages_mV[i]);
     }
+    CHECK(sds1601_no_load_voltage_at_rpm(145U) >= 7900U);
+    CHECK(sds1601_no_load_voltage_at_rpm(145U) <= 8150U);
     return 0;
 }
 

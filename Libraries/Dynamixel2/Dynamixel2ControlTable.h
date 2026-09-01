@@ -10,7 +10,7 @@
 #include <stdint.h>
 
 /** Multi-byte Control Table values use little-endian byte order. / 控制表多字节值使用小端序。 */
-#define DXL2_CONTROL_TABLE_SIZE             386U
+#define DXL2_CONTROL_TABLE_SIZE             418U
 #define DXL2_ENCODER_COUNTS_PER_REV         16384L
 #define DXL2_PID_GAIN_SCALE                 1000L
 #define DXL2_VELOCITY_PID_I_SCALE           10000L
@@ -73,7 +73,7 @@ typedef enum
     DXL2_ADDR_ENCODER_OFFSET_COUNT = 118,
     DXL2_ADDR_FAIL_SAFE_POLICY = 120,
     DXL2_ADDR_CURRENT_TICK_MS = 122,
-    DXL2_ADDR_PWM_INPUT_LOW_US = 126,
+    DXL2_ADDR_PWM_INPUT_PULSE_US = 126,
 
     DXL2_ADDR_LAST_DIAGNOSTIC = 128,
     DXL2_ADDR_DIAGNOSTIC_COUNT = 130,
@@ -167,7 +167,7 @@ typedef enum
 
     DXL2_ADDR_LOW_SPEED_COMP_MAX_SPEED_CPS = 352,
     DXL2_ADDR_LOW_SPEED_COMP_FORWARD_MAP = 354,
-    DXL2_ADDR_LOW_SPEED_COMP_REVERSE_MAP = 370
+    DXL2_ADDR_LOW_SPEED_COMP_REVERSE_MAP = 386
 } Dynamixel2ControlTableAddress;
 
 typedef enum
@@ -232,6 +232,7 @@ typedef enum
     DXL2_STATUS_PROTECTION_INHIBIT = (1U << 4),
     DXL2_STATUS_UNDERVOLTAGE = (1U << 5),
     DXL2_STATUS_OVERTEMPERATURE = (1U << 6),
+    DXL2_STATUS_OVERCURRENT_INHIBIT = (1U << 7),
     DXL2_STATUS_PWM_SOURCE = (1U << 8),
     DXL2_STATUS_SERIAL_SOURCE = (1U << 9),
     DXL2_STATUS_CRSF_SOURCE = (1U << 10),

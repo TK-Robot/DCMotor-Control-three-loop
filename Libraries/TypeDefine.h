@@ -13,7 +13,7 @@
 #include "MechanicalModel/MechanicalModel.h"
 #include "MotorTorqueModel/MotorTorqueModel.h"
 
-#define LOW_SPEED_COMP_BIN_COUNT             16U
+#define LOW_SPEED_COMP_BIN_COUNT             32U
 #define LOW_SPEED_COMP_MAX_CORRECTION_MA      100
 #define LOW_SPEED_COMP_DEFAULT_MAX_SPEED_CPS 3000U
 
@@ -29,7 +29,8 @@ typedef enum
     SERVO_MODE_CURRENT = 0, ///< Hybrid model/observable-current command. / 模型与可观测电流混合指令。
     SERVO_MODE_SPEED,       ///< Velocity PI plus model voltage actuation. / 速度 PI 加模型电压执行。
     SERVO_MODE_POSITION,    ///< Position P plus velocity PI. / 位置 P 加速度 PI。
-    SERVO_MODE_TORQUE       ///< Estimated torque-to-current model. / 估算力矩到电流模型。
+    SERVO_MODE_TORQUE,      ///< Estimated torque-to-current model. / 估算力矩到电流模型。
+    SERVO_MODE_PWM_DUTY     ///< Diagnostic direct duty in target_current_mA, -1000..1000 permille. / 诊断直通占空比，复用目标电流字段，范围 -1000..1000 千分比。
 } ServoMode;
 
 /**
@@ -41,7 +42,7 @@ typedef struct
     ServoMode mode;           ///< Active servo mode. / 当前伺服模式。
     bool enable;              ///< Output enable command. / 输出使能指令。
     bool position_multi_turn; ///< Position target is accumulated when true; otherwise it stays inside the current turn. / true 为多圈累计目标，否则限制在当前单圈内且不跨零。
-    int16_t target_current_mA; ///< Current target in mA. / 电流目标，单位 mA。
+    int16_t target_current_mA; ///< Current target in mA, or diagnostic PWM permille in mode 4. / 电流目标（mA）；模式4时为诊断 PWM 千分比。
     int32_t target_torque_uNm; ///< Estimated shaft load torque target. / 轴端负载力矩目标，单位 uN·m。
     int32_t target_speed;     ///< Speed target. / 速度目标。
     int32_t target_position;  ///< Position target. / 位置目标。
@@ -239,7 +240,7 @@ typedef struct
     int16_t CurrentWindowAvg_mA;    ///< Window average of valid samples. / 窗口有效样本平均。
     uint16_t CurrentHardLimitTrips; ///< Hard current-limit events. / 硬限流事件次数。
     uint16_t CurrentPiFrozenCount;  ///< PI frozen (left observable region) events. / PI 冻结事件次数。
-    int16_t CurrentAverage_mA;      ///< Measurement-corrected cycle-average winding current. / 实测校正的周期平均绕组电流。
+    int16_t CurrentAverage_mA;      ///< R/Ke model estimate of cycle-average winding current. / R/Ke 模型估算的周期平均绕组电流。
     uint16_t CurrentPeakChopEvents; ///< Non-latching peak-current chop events. / 非锁存峰值削波事件次数。
     bool CurrentPeakLimitActive;    ///< The actuator is suppressing a peak-current pulse. / 执行器正在抑制峰值电流脉冲。
     bool CurrentPiWasRunning;       ///< Previous-update PI running state. / 上一拍 PI 运行状态。

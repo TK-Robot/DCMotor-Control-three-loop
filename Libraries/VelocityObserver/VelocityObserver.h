@@ -1,6 +1,6 @@
 /**
  * @file VelocityObserver.h
- * @brief Sliding-window encoder velocity estimator.
+ * @brief Hybrid encoder edge-period velocity estimator.
  * @brief 定点 alpha-beta 位置速度观测器。
  */
 
@@ -14,7 +14,7 @@ typedef struct
 {
     int32_t last_position;
     int32_t velocity_cps;
-    int32_t velocity_accumulator;
+    uint32_t edge_elapsed_us;
     bool initialized;
 } VelocityObserver;
 

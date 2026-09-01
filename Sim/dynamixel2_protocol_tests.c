@@ -98,7 +98,7 @@ static void test_status_and_sync_instructions(void)
 
 static void test_control_table_contract(void)
 {
-    check(DXL2_CONTROL_TABLE_SIZE == 386U, "Control Table size");
+    check(DXL2_CONTROL_TABLE_SIZE == 418U, "Control Table size");
     check(DXL2_FIXED_STATUS_RETURN_LEVEL == 2U,
           "fixed Status Return Level");
     check(DXL2_STATUS_ERROR_NONE == 0x00U
@@ -126,7 +126,7 @@ static void test_control_table_contract(void)
               && DXL2_REPLY_SLOT_MIN_US == 50U,
           "reply slot wire-time contract");
     check(DXL2_ADDR_CURRENT_TICK_MS == 122U, "Current Tick address");
-    check(DXL2_ADDR_PWM_INPUT_LOW_US == 126U, "PWM input observation address");
+    check(DXL2_ADDR_PWM_INPUT_PULSE_US == 126U, "PWM input observation address");
     check(DXL2_ADDR_ACCEL_LIMIT_CPS2 == 10U
               && DXL2_ADDR_DECEL_LIMIT_CPS2 == 154U,
           "scaled 16-bit acceleration and deceleration addresses");
@@ -146,7 +146,7 @@ static void test_control_table_contract(void)
               && DXL2_ADDR_STALL_ELAPSED_MS == 350U
               && DXL2_ADDR_LOW_SPEED_COMP_MAX_SPEED_CPS == 352U
               && DXL2_ADDR_LOW_SPEED_COMP_FORWARD_MAP == 354U
-              && DXL2_ADDR_LOW_SPEED_COMP_REVERSE_MAP == 370U,
+              && DXL2_ADDR_LOW_SPEED_COMP_REVERSE_MAP == 386U,
           "torque, low-speed compensation and telemetry addresses");
     check(DXL2_TORQUE_STATUS_TORQUE_MODEL_VALID == 0x0001U
               && DXL2_TORQUE_STATUS_ELECTRICAL_MODEL_VALID == 0x0002U
@@ -159,7 +159,8 @@ static void test_control_table_contract(void)
               && DXL2_TORQUE_STATUS_CURRENT_SAMPLE_UNQUALIFIED == 0x0100U,
           "torque model status bits");
     check(SERVO_MODE_CURRENT == 0 && SERVO_MODE_SPEED == 1
-              && SERVO_MODE_POSITION == 2 && SERVO_MODE_TORQUE == 3,
+              && SERVO_MODE_POSITION == 2 && SERVO_MODE_TORQUE == 3
+              && SERVO_MODE_PWM_DUTY == 4,
           "servo mode values remain backward compatible");
     check(DXL2_STATUS_READY == 0x0001U
               && DXL2_STATUS_PWM_INPUT_VALID == 0x0002U
@@ -167,7 +168,8 @@ static void test_control_table_contract(void)
               && DXL2_STATUS_FAULT_PRESENT == 0x0008U
               && DXL2_STATUS_PROTECTION_INHIBIT == 0x0010U
               && DXL2_STATUS_UNDERVOLTAGE == 0x0020U
-              && DXL2_STATUS_OVERTEMPERATURE == 0x0040U,
+              && DXL2_STATUS_OVERTEMPERATURE == 0x0040U
+              && DXL2_STATUS_OVERCURRENT_INHIBIT == 0x0080U,
           "Status Word low bits");
     check(DXL2_STATUS_PWM_SOURCE == 0x0100U
               && DXL2_STATUS_SERIAL_SOURCE == 0x0200U

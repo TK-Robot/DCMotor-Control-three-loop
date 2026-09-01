@@ -45,10 +45,10 @@ static void ServoControl_UpdateTorqueEstimate(ServoControl *servo)
                              &param->MechanicalResult);
 }
 
-void ServoControl_BuildPwmPositionCommand(uint16_t low_width_us, bool signal_valid,
+void ServoControl_BuildPwmPositionCommand(uint16_t pulse_width_us, bool signal_valid,
                                           ServoCommand *command)
 {
-    uint16_t clamped_width = low_width_us;
+    uint16_t clamped_width = pulse_width_us;
 
     if (command == NULL)
     {
@@ -82,42 +82,54 @@ static int32_t ServoControl_AbsI32(int32_t value)
     return (value < 0) ? -value : value;
 }
 
-static bool ServoControl_UpdateStallProtection(ServoControl *servo)
+static void ServoControl_UpdateStallProtection(ServoControl *servo)
 {
     Param *param = servo->param;
-    bool closed_motion_mode = servo->command.mode == SERVO_MODE_SPEED
-                           || servo->command.mode == SERVO_MODE_POSITION;
-    bool motion_requested = ServoControl_AbsI32(param->EncoderSpeedExpect)
-                         > param->StallSpeedThreshold_cps;
-    bool speed_low = ServoControl_AbsI32(param->EncoderSpeed)
-                  <= param->StallSpeedThreshold_cps;
-    bool current_high = ServoControl_AbsI32(param->CurrentAverage_mA)
-                     >= param->StallCurrentThreshold_mA;
+    uint16_t current_mA = (uint16_t)ServoControl_AbsI32(param->CurrentAverage_mA);
+    bool sustained_overload = param->CurrentPeakLimit_mA != 0U
+                           && current_mA >= param->CurrentPeakLimit_mA;
+    bool stall_condition =
+        (servo->command.mode == SERVO_MODE_SPEED
+         || servo->command.mode == SERVO_MODE_POSITION)
+        && ServoControl_AbsI32(param->EncoderSpeedExpect)
+           > param->StallSpeedThreshold_cps
+        && ServoControl_AbsI32(param->EncoderSpeed)
+           <= param->StallSpeedThreshold_cps
+        && current_mA >= param->StallCurrentThreshold_mA;
 
-    if (closed_motion_mode && motion_requested && speed_low && current_high
-        && param->StallConfirmTimeMs != 0U)
-    {
-        uint32_t elapsed = param->StallElapsedMs + param->CycleTimeMs;
-        param->StallElapsedMs = elapsed > UINT16_MAX
-                                  ? UINT16_MAX : (uint16_t)elapsed;
-    }
-    else
+    if (param->StallConfirmTimeMs == 0U
+        || (!sustained_overload && !stall_condition))
     {
         param->StallElapsedMs = 0U;
+        return;
     }
 
-    if (param->StallConfirmTimeMs != 0U
-        && param->StallElapsedMs >= param->StallConfirmTimeMs)
+    if (param->StallElapsedMs < param->StallConfirmTimeMs)
     {
-        param->FaultCode = SERVO_FAULT_STALL;
-        param->ProtectionFlags |= PROTECTION_STALL;
+        param->StallElapsedMs++;
+    }
+    if (param->StallElapsedMs >= param->StallConfirmTimeMs)
+    {
+        if (stall_condition)
+        {
+            param->FaultCode = SERVO_FAULT_STALL;
+            param->ProtectionFlags |= PROTECTION_STALL;
+        }
+        else
+        {
+            /* PWM retries after a cooldown because it has no separate enable
+             * edge. Serial and CRSF remain inhibited until enable goes low. */
+            servo->overload_hold_ms =
+                param->ControlSource == CONTROL_SOURCE_PWM_INPUT
+                ? param->StallConfirmTimeMs : UINT16_MAX;
+            param->ProtectionFlags |= PROTECTION_OVERCURRENT;
+            param->StallElapsedMs = 0U;
+        }
         param->OutputEnabled = false;
         param->DriveRunMode = 0U;
         param->DrivePower = 0;
         ServoControl_ResetLoops(servo);
-        return true;
     }
-    return false;
 }
 
 static int16_t ServoControl_ClampCurrent(int16_t current_mA, uint16_t limit_mA)
@@ -134,51 +146,6 @@ static int16_t ServoControl_ClampCurrent(int16_t current_mA, uint16_t limit_mA)
 }
 
 static uint16_t ServoControl_EffectiveCurrentLimit(const ServoControl *servo);
-
-static int16_t ServoControl_ApplyLowSpeedCompensation(
-    ServoControl *servo, int16_t base_current_mA,
-    int32_t reference_speed_cps, bool compensate_motion)
-{
-    Param *param = servo->param;
-    uint16_t phase = param->EncoderValue & 0x3FFFU;
-    uint8_t bin = (uint8_t)(phase >> 10U);
-    int32_t speed_abs = ServoControl_AbsI32(reference_speed_cps);
-    uint16_t cutoff = param->LowSpeedCompMaxSpeed_cps;
-    const int8_t *map;
-    int32_t correction;
-    int32_t candidate;
-
-    if (!compensate_motion || cutoff < 500U
-        || speed_abs == 0 || speed_abs >= cutoff
-        || base_current_mA == 0
-        || ((reference_speed_cps ^ base_current_mA) < 0))
-    {
-        return base_current_mA;
-    }
-
-    map = param->LowSpeedCompMap_mA[reference_speed_cps < 0];
-    correction = map[bin]
-               + ((int32_t)(map[(bin + 1U) & 0x0FU] - map[bin])
-                  * (phase & 0x03FFU)) / 1024L;
-
-    /* Keep full calibration below half the cutoff, then fade continuously. */
-    if (speed_abs > (int32_t)cutoff / 2L)
-    {
-        correction = correction * ((int32_t)cutoff - speed_abs) * 2L
-                   / cutoff;
-    }
-    if (reference_speed_cps < 0) correction = -correction;
-
-    candidate = (int32_t)base_current_mA + correction;
-    if ((base_current_mA > 0 && candidate < 0)
-        || (base_current_mA < 0 && candidate > 0))
-    {
-        candidate = 0;
-    }
-    candidate = ServoControl_ClampCurrent(
-        (int16_t)candidate, ServoControl_EffectiveCurrentLimit(servo));
-    return (int16_t)candidate;
-}
 
 static uint16_t ServoControl_EffectiveCurrentLimit(const ServoControl *servo)
 {
@@ -216,8 +183,6 @@ static void ServoControl_ResolveShaftTorque(ServoControl *servo,
 
     param->TargetTorque_uNm = shaft_target_torque_uNm;
     param->TargetElectromagneticTorque_uNm = electromagnetic_target_uNm;
-    target_current_mA = ServoControl_ApplyLowSpeedCompensation(
-        servo, target_current_mA, reference_speed_cps, compensate_motion);
     target_current_mA = MotorTorqueModel_LimitCurrentByVoltage(
         &param->MotorTorqueParams,
         target_current_mA,
@@ -340,6 +305,7 @@ void ServoControl_Init(ServoControl *servo, Param *param)
     servo->save_request = false;
     servo->power_low_latched = false;
     servo->current_speed_limit_active = false;
+    servo->overload_hold_ms = 0U;
     servo->position_speed_target = 0;
     servo->single_turn_target_absolute = 0;
     param->OutputEnabled = false;
@@ -365,6 +331,7 @@ void ServoControl_ResetLoops(ServoControl *servo)
     PID_Reset(&param->Pid_PosEle);
     param->SpeedRef = 0;
     param->EncoderSpeedExpect = 0;
+    param->target_speed = 0;
     servo->position_speed_target = 0;
     servo->single_turn_target_absolute =
         param->EncoderMultiTurnValue - (int32_t)param->EncoderValue
@@ -419,7 +386,8 @@ void ServoControl_Run1ms(ServoControl *servo)
             || param->TorqueCurrentLimit_mA > 30000U);
     bool encoder_feedback_invalid = servo->command.enable &&
         (servo->command.mode == SERVO_MODE_SPEED ||
-         servo->command.mode == SERVO_MODE_POSITION) &&
+         servo->command.mode == SERVO_MODE_POSITION ||
+         servo->command.mode == SERVO_MODE_PWM_DUTY) &&
         (!param->EncoderFeedbackValid ||
          param->EncoderSampleAgeMs > SERVO_ENCODER_TIMEOUT_MS);
     bool watchdog_fallback =
@@ -473,20 +441,20 @@ void ServoControl_Run1ms(ServoControl *servo)
     }
     if (param->FaultCode == SERVO_FAULT_ENCODER)
         param->ProtectionFlags |= PROTECTION_ENCODER;
-    /* Clearing a fault disarms the command before CurrentControl is reset later
-     * in the 1 ms loop.  Do not relatch the just-cleared fault from that stale
-     * actuator latch while output is already disarmed. */
-    if (param->CurrentHardLimitActive && servo->command.enable)
-    {
-        param->FaultCode = SERVO_FAULT_OVERCURRENT;
-    }
-    if (param->FaultCode == SERVO_FAULT_OVERCURRENT)
-    {
-        param->ProtectionFlags |= PROTECTION_OVERCURRENT;
-    }
     if (param->FaultCode == SERVO_FAULT_STALL)
     {
         param->ProtectionFlags |= PROTECTION_STALL;
+    }
+    if (!servo->command.enable)
+    {
+        servo->overload_hold_ms = 0U;
+        param->StallElapsedMs = 0U;
+    }
+    else if (servo->overload_hold_ms != 0U)
+    {
+        if (servo->overload_hold_ms != UINT16_MAX)
+            servo->overload_hold_ms--;
+        param->ProtectionFlags |= PROTECTION_OVERCURRENT;
     }
     if (param->ProtectionFlags != PROTECTION_NONE || latched_fault_inhibits)
     {
@@ -544,11 +512,6 @@ void ServoControl_Run1ms(ServoControl *servo)
                                             param->EncoderSpeedExpect,
                                             reference_acceleration_cps2,
                                             true);
-            if ((param->EncoderSpeedExpect ^ param->ExpectMA) < 0)
-            {
-                param->TargetElectromagneticTorque_uNm = 0;
-                param->ExpectMA = 0;
-            }
         }
     }
     else if (servo->command.mode == SERVO_MODE_TORQUE)
@@ -567,35 +530,42 @@ void ServoControl_Run1ms(ServoControl *servo)
         param->ExpectMA = servo->command.target_current_mA;
     }
 
-    if (param->TorqueCurrentLimit_mA != 0U)
+    if (servo->command.mode == SERVO_MODE_PWM_DUTY)
     {
-        param->ExpectMA = ServoControl_ClampCurrent(
-            param->ExpectMA, param->TorqueCurrentLimit_mA);
-    }
-
-    if (servo->command.current_limit_mA != 0U)
-    {
-        const int16_t limit = (int16_t)servo->command.current_limit_mA;
-        if (param->ExpectMA > limit) param->ExpectMA = limit;
-        else if (param->ExpectMA < -limit) param->ExpectMA = (int16_t)-limit;
-    }
-
-    if (ServoControl_CurrentSpeedLimited(servo))
-    {
-        /* Remove same-direction torque above SpeedMax; do not auto-enable braking. */
-        /* 超过 SpeedMax 时去除同向转矩，不自动切换为制动使能。 */
-        PID_Reset(&param->Pid_PosEle);
-        (void)PID_CurrentLoop(param, 0);
+        param->DrivePower = servo->command.target_current_mA;
     }
     else
     {
-        (void)PID_CurrentLoop(param, param->ExpectMA);
+        if (param->TorqueCurrentLimit_mA != 0U)
+        {
+            param->ExpectMA = ServoControl_ClampCurrent(
+                param->ExpectMA, param->TorqueCurrentLimit_mA);
+        }
+
+        if (servo->command.current_limit_mA != 0U)
+        {
+            const int16_t limit = (int16_t)servo->command.current_limit_mA;
+            if (param->ExpectMA > limit) param->ExpectMA = limit;
+            else if (param->ExpectMA < -limit) param->ExpectMA = (int16_t)-limit;
+        }
+
+        if (ServoControl_CurrentSpeedLimited(servo))
+        {
+            /* Remove same-direction torque above SpeedMax; do not auto-enable braking. */
+            /* 超过 SpeedMax 时去除同向转矩，不自动切换为制动使能。 */
+            PID_Reset(&param->Pid_PosEle);
+            (void)PID_CurrentLoop(param, 0);
+        }
+        else
+        {
+            (void)PID_CurrentLoop(param, param->ExpectMA);
+        }
     }
     /* Mode 4 starts in slow decay. The PWM-synchronous actuator may select a
      * bounded fast-decay interval from target transients or qualified current
      * overshoot; this 1 kHz layer only publishes the configured baseline. */
     param->DriveRunMode = param->DrivePwmMode == 3U ? 3U : 2U;
-    (void)ServoControl_UpdateStallProtection(servo);
+    ServoControl_UpdateStallProtection(servo);
 }
 
 bool ServoControl_IsSpeedDue(const ServoControl *servo)

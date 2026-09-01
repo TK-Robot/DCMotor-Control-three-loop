@@ -265,7 +265,10 @@ Dxl2DecodeResult Dxl2_DecodePacket(const uint8_t *input, uint16_t length)
     /* 报告可移除的前导噪声，同时保留末尾三个可能属于下一包包头的字节。 */
     for (offset = 0U; offset + 4U <= length; ++offset)
     {
-        if (memcmp(&input[offset], Dxl2_Header, sizeof(Dxl2_Header)) == 0)
+        if (input[offset] == Dxl2_Header[0]
+            && input[offset + 1U] == Dxl2_Header[1]
+            && input[offset + 2U] == Dxl2_Header[2]
+            && input[offset + 3U] == Dxl2_Header[3])
         {
             break;
         }

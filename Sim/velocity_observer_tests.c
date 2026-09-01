@@ -61,7 +61,7 @@ static void test_sliding_window_updates_each_sample(void)
     for (int sample = 0; sample <= 128; ++sample)
         previous_velocity = VelocityObserver_Update(&observer, sample, 1000U);
     velocity = VelocityObserver_Update(&observer, 130, 1000U);
-    CHECK(abs(previous_velocity - 1000) < 10);
+    CHECK(abs(previous_velocity - 1000) < 30);
     CHECK(velocity > previous_velocity);
 }
 
@@ -88,6 +88,50 @@ static void test_large_position_jump_rebaselines(void)
     (void)VelocityObserver_Update(&observer, 0, 1000U);
     (void)VelocityObserver_Update(&observer, 10, 1000U);
     CHECK(VelocityObserver_Update(&observer, 10000, 1000U) == 0);
+}
+
+static void test_sparse_low_speed_edges_remain_smooth(void)
+{
+    VelocityObserver observer;
+    int32_t position = 0;
+    int32_t minimum = 100000;
+    int32_t maximum = 0;
+
+    VelocityObserver_Init(&observer);
+    for (int sample = 0; sample < 500; ++sample)
+    {
+        int32_t velocity;
+        if (sample != 0 && sample % 10 == 0) position++;
+        velocity = VelocityObserver_Update(&observer, position, 1000U);
+        if (sample >= 200)
+        {
+            if (velocity < minimum) minimum = velocity;
+            if (velocity > maximum) maximum = velocity;
+        }
+    }
+    CHECK(minimum >= 90);
+    CHECK(maximum <= 110);
+}
+
+static void test_sparse_low_speed_stops_without_false_reverse(void)
+{
+    VelocityObserver observer;
+    int32_t position = 0;
+    int32_t velocity = 0;
+
+    VelocityObserver_Init(&observer);
+    for (int sample = 0; sample < 300; ++sample)
+    {
+        if (sample != 0 && sample % 10 == 0) position--;
+        velocity = VelocityObserver_Update(&observer, position, 1000U);
+    }
+    CHECK(velocity < -90 && velocity > -110);
+    for (int sample = 0; sample < 100; ++sample)
+    {
+        velocity = VelocityObserver_Update(&observer, position, 1000U);
+        CHECK(velocity <= 0);
+    }
+    CHECK(velocity == 0);
 }
 
 static void test_variable_sample_period_uses_measured_time(void)
@@ -135,6 +179,8 @@ int main(void)
     test_sliding_window_updates_each_sample();
     test_one_count_stationary_jitter_is_bounded();
     test_large_position_jump_rebaselines();
+    test_sparse_low_speed_edges_remain_smooth();
+    test_sparse_low_speed_stops_without_false_reverse();
     test_variable_sample_period_uses_measured_time();
     test_abrupt_sample_period_change_does_not_spike();
 

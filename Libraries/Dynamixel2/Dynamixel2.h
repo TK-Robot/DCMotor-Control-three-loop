@@ -21,7 +21,7 @@ extern "C" {
 
 #define DXL2_RX_STREAM_SIZE      256U   /**< Reassembly buffer across DMA idle events. / 跨 DMA 空闲事件的重组缓冲区。 */
 #define DXL2_MODEL_NUMBER        0x0001U /**< TK Servo model number returned by Ping. / Ping 返回的 TK Servo 型号。 */
-#define DXL2_FIRMWARE_VERSION    0x0DU   /**< One-byte firmware revision. / 单字节固件版本。 */
+#define DXL2_FIRMWARE_VERSION    0x19U   /**< One-byte firmware revision. / 单字节固件版本。 */
 
 /** Observe copied RX bytes without taking ownership of the UART transport. / 观察已复制的接收字节，但不取得 UART 传输所有权。 */
 typedef void (*Dynamixel2RxObserver)(void *user, const uint8_t *data,

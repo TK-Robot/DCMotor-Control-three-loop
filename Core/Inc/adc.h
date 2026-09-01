@@ -34,9 +34,13 @@ extern "C" {
 
 /* USER CODE BEGIN Private defines */
 
-/* ADC ranks: INA181 OUT, bus voltage, temperature sensor, VREFINT. */
-/* ADC 排序：INA181 输出、母线电压、温度传感器、VREFINT。 */
-#define ADC_STATUS_CONVERSION_COUNT 4U
+/* ADC ranks: INA181 OUT, VREFINT, bus voltage, temperature sensor. */
+/* ADC 排序：INA181 输出、VREFINT、母线电压、温度传感器。 */
+#define ADC_STATUS_CONVERSION_COUNT  4U
+#define ADC_STATUS_CURRENT_INDEX     0U
+#define ADC_STATUS_VREFINT_INDEX     1U
+#define ADC_STATUS_BUS_INDEX         2U
+#define ADC_STATUS_TEMPERATURE_INDEX 3U
 
 /* USER CODE END Private defines */
 

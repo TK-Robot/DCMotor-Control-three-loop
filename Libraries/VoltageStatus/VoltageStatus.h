@@ -15,7 +15,7 @@
 #include "TypeDefine.h"
 #include "Filter.h"
 
-#define MaxVoltageBit 16383 ///< ADC full-scale value. / ADC 满量程数值。
+#define MaxVoltageBit 8191 ///< 2x oversampling sum full scale. / 2 倍过采样累加满量程。
 #define VrefInt 1212       ///< Internal reference voltage in mV. / 内部参考电压，单位 mV。
 #define VREF 3300          ///< Nominal MCU supply in mV. / MCU 标称供电，单位 mV。
 #define SamplingMR 90      ///< Current sampling resistor parameter. / 电流采样电阻参数。
@@ -55,6 +55,8 @@ typedef struct
     int16_t window_max_mA;
     uint16_t window_tick_ms;
     bool last_hard_limit;
+    volatile uint16_t adc_snapshot[ADC_STATUS_CONVERSION_COUNT];
+    volatile uint32_t adc_snapshot_sequence;
 } VoltageStatus;
 
 /**

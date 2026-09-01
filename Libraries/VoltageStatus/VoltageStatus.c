@@ -6,12 +6,15 @@
 
 #include "VoltageStatus.h"
 #include "CurrentSenseModel.h"
+#include "MotorTorqueModel.h"
 
 #include <stddef.h>
 #include <stdlib.h>
 
 #define CURRENT_FILTER_SLOW_DECAY_ALPHA 64U
 #define CURRENT_FILTER_FAST_DECAY_ALPHA 128U
+#define ADC_STATUS_VREFINT_MIN_CODE 2000U
+#define ADC_STATUS_VREFINT_MAX_CODE 4500U
 
 static int8_t VoltageStatus_DriveSign(int16_t power_permille)
 {
@@ -42,23 +45,39 @@ static void VoltageStatus_CalibrateAdc(ADC_TypeDef *adc)
     LL_ADC_REG_SetDMATransfer(adc, dma_transfer);
 }
 
-static void VoltageStatus_ReadSnapshot(const Param *params,
+static void VoltageStatus_PublishSnapshot(VoltageStatus *status)
+{
+    status->adc_snapshot_sequence++;
+    __DMB();
+    for (uint32_t i = 0U; i < ADC_STATUS_CONVERSION_COUNT; ++i)
+    {
+        status->adc_snapshot[i] = status->param->VoltageBuf[i];
+    }
+    __DMB();
+    status->adc_snapshot_sequence++;
+}
+
+static void VoltageStatus_ReadSnapshot(const VoltageStatus *status,
                                        uint16_t samples[ADC_STATUS_CONVERSION_COUNT])
 {
-    uint32_t remaining_before;
-    uint32_t remaining_after;
+    uint32_t sequence_before;
+    uint32_t sequence_after;
 
-    /* A scan takes much longer than this four-value copy. Retry if DMA changed
-     * CNDTR during the copy so all values belong to one coherent scan. */
-    for (uint32_t attempt = 0U; attempt < 3U; ++attempt)
+    /* The DMA interrupt publishes only complete four-rank scans. A sequence
+     * lock prevents the 1 ms loop from observing a partially copied frame. */
+    for (;;)
     {
-        remaining_before = LL_DMA_GetDataLength(DMA1, LL_DMA_CHANNEL_1);
+        sequence_before = status->adc_snapshot_sequence;
+        if ((sequence_before & 1U) != 0U) continue;
+        __DMB();
         for (uint32_t i = 0U; i < ADC_STATUS_CONVERSION_COUNT; ++i)
         {
-            samples[i] = params->VoltageBuf[i];
+            samples[i] = status->adc_snapshot[i];
         }
-        remaining_after = LL_DMA_GetDataLength(DMA1, LL_DMA_CHANNEL_1);
-        if (remaining_before == remaining_after)
+        __DMB();
+        sequence_after = status->adc_snapshot_sequence;
+        if (sequence_before == sequence_after
+            && (sequence_after & 1U) == 0U)
         {
             break;
         }
@@ -73,10 +92,37 @@ static uint16_t VoltageStatus_CalibrateCurrentOffset(VoltageStatus *status)
     {
         LL_DMA_ClearFlag_TC1(DMA1);
         while (LL_DMA_IsActiveFlag_TC1(DMA1) == 0U) {}
-        sum += status->param->VoltageBuf[0];
+        sum += status->param->VoltageBuf[ADC_STATUS_CURRENT_INDEX];
     }
     LL_DMA_ClearFlag_TC1(DMA1);
     return (uint16_t)((sum + 8U) / 16U);
+}
+
+static void VoltageStatus_RestartSampling(VoltageStatus *status)
+{
+    ADC_TypeDef *adc = status->adc;
+
+    /* Stop ADC requests before resetting the DMA write index. This restores
+     * rank 1 -> buffer[0] without racing a conversion already in progress. */
+    NVIC_DisableIRQ(DMA1_Channel1_IRQn);
+    if (LL_ADC_REG_IsConversionOngoing(adc) != 0U)
+    {
+        LL_ADC_REG_StopConversion(adc);
+        while (LL_ADC_REG_IsConversionOngoing(adc) != 0U) {}
+    }
+    LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_1);
+    LL_DMA_ClearFlag_GI1(DMA1);
+    LL_DMA_SetDataLength(DMA1, LL_DMA_CHANNEL_1,
+                         ADC_STATUS_CONVERSION_COUNT);
+    LL_ADC_ClearFlag_OVR(adc);
+    NVIC_ClearPendingIRQ(DMA1_Channel1_IRQn);
+    LL_DMA_EnableChannel(DMA1, LL_DMA_CHANNEL_1);
+    LL_ADC_REG_StartConversion(adc);
+    NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+
+    status->sample_valid = false;
+    status->sample_filter_initialized = false;
+    status->param->CurrentSampleValid = false;
 }
 
 void VoltageStatus_init(VoltageStatus *status, ADC_TypeDef *adc, Param *params)
@@ -84,25 +130,25 @@ void VoltageStatus_init(VoltageStatus *status, ADC_TypeDef *adc, Param *params)
     status->adc = adc;
     status->param = params;
 
-    /* PA0 uses the original 16-conversion hardware average. Its roughly
-     * 26-us aperture averages the narrow PWM pulse and INA181 response. */
-    /* 四通道 16 倍过采样超过一个 PWM 周期；每次触发仅做一次短扫描，
-     * CH4 由 AD116 动态移动到有效驱动区。 */
+    /* At 32 MHz ADC clock the 2x four-rank scan remains below the 39.06-us PWM
+     * period with useful DMA margin. PA1 has a 100 nF hold capacitor, so it
+     * shares the short sampling bank with low-impedance INA181 output while
+     * VREFINT and the temperature sensor retain their required long sample. */
     LL_ADC_REG_SetTriggerSource(adc, LL_ADC_REG_TRIG_EXT_TIM3_TRGO);
     LL_ADC_SetOverSamplingScope(adc, LL_ADC_OVS_GRP_REGULAR_CONTINUED);
-    LL_ADC_ConfigOverSamplingRatioShift(adc, LL_ADC_OVS_RATIO_16,
-                                        LL_ADC_OVS_SHIFT_RIGHT_2);
+    LL_ADC_ConfigOverSamplingRatioShift(adc, LL_ADC_OVS_RATIO_2,
+                                        LL_ADC_OVS_SHIFT_NONE);
     LL_ADC_SetOverSamplingDiscont(adc, LL_ADC_OVS_REG_CONT);
     LL_ADC_SetSamplingTimeCommonChannels(adc,
                                          LL_ADC_SAMPLINGTIME_COMMON_1,
-                                         LL_ADC_SAMPLINGTIME_39CYCLES_5);
+                                         LL_ADC_SAMPLINGTIME_7CYCLES_5);
     LL_ADC_SetSamplingTimeCommonChannels(adc,
                                          LL_ADC_SAMPLINGTIME_COMMON_2,
-                                         LL_ADC_SAMPLINGTIME_79CYCLES_5);
+                                         LL_ADC_SAMPLINGTIME_160CYCLES_5);
     LL_ADC_SetChannelSamplingTime(adc, LL_ADC_CHANNEL_0,
                                   LL_ADC_SAMPLINGTIME_COMMON_1);
     LL_ADC_SetChannelSamplingTime(adc, LL_ADC_CHANNEL_1,
-                                  LL_ADC_SAMPLINGTIME_COMMON_2);
+                                  LL_ADC_SAMPLINGTIME_COMMON_1);
     LL_ADC_SetChannelSamplingTime(adc, LL_ADC_CHANNEL_TEMPSENSOR,
                                   LL_ADC_SAMPLINGTIME_COMMON_2);
     LL_ADC_SetChannelSamplingTime(adc, LL_ADC_CHANNEL_VREFINT,
@@ -154,6 +200,11 @@ void VoltageStatus_init(VoltageStatus *status, ADC_TypeDef *adc, Param *params)
     status->window_max_mA = 0;
     status->window_tick_ms = 0U;
     status->last_hard_limit = false;
+    status->adc_snapshot_sequence = 0U;
+    for (uint32_t i = 0U; i < ADC_STATUS_CONVERSION_COUNT; ++i)
+    {
+        status->adc_snapshot[i] = status->param->VoltageBuf[i];
+    }
     status->param->CurrentAdcOffset = status->current_offset_adc;
     status->sample_drive_mode = 0U;
     status->sample_drive_sign = 0;
@@ -202,16 +253,13 @@ bool VoltageStatus_IsPowerLow(const VoltageStatus* VoltageStatus)
     return VoltageStatus->param->VCC_mV < VoltageStatus->param->PowerSaveVoltage_mV;
 }
 
-static int8_t STM32_Temp_Calc(uint16_t adc, uint16_t Vref)
+static int16_t STM32_Temp_Calc(uint16_t adc, uint16_t Vref)
 {
     int16_t temp;
     if (Vref == 0U)
     {
         return 0;
     }
-
-    adc=adc>>2;
-    Vref=Vref>>2;
 
     /* Correct temperature ADC reading with factory VREFINT calibration. */
     /* 使用出厂 VREFINT 校准值修正温度 ADC 采样。 */
@@ -223,15 +271,38 @@ static int8_t STM32_Temp_Calc(uint16_t adc, uint16_t Vref)
            / (TS_CAL2 - TS_CAL1)
            + 30;
 
-    return (int8_t)temp;
+    return temp;
+}
+
+static bool VoltageStatus_IsFrameValid(
+    const uint16_t samples[ADC_STATUS_CONVERSION_COUNT])
+{
+    uint16_t vref = samples[ADC_STATUS_VREFINT_INDEX];
+
+    /* With 2x accumulation, VREFINT is around 3000 counts at VDDA=3.3 V.
+     * A rank-shifted scan puts bus/current/temperature in this slot and must
+     * not be allowed to become an apparent undervoltage sample. */
+    if (vref < ADC_STATUS_VREFINT_MIN_CODE
+        || vref > ADC_STATUS_VREFINT_MAX_CODE)
+    {
+        return false;
+    }
+    return samples[ADC_STATUS_TEMPERATURE_INDEX] >= 500U
+        && samples[ADC_STATUS_TEMPERATURE_INDEX] <= 4500U;
 }
 
 void VoltageStatus_AnalyzeData(VoltageStatus* VoltageStatus)
 {
     uint16_t samples[ADC_STATUS_CONVERSION_COUNT];
 
-    VoltageStatus_ReadSnapshot(VoltageStatus->param, samples);
-    VoltageStatus->param->VCC_mV=VoltageStatus_VccAdcToPower_mV(samples[1],samples[3]);
+    VoltageStatus_ReadSnapshot(VoltageStatus, samples);
+    if (!VoltageStatus_IsFrameValid(samples))
+    {
+        VoltageStatus_RestartSampling(VoltageStatus);
+        return;
+    }
+    VoltageStatus->param->VCC_mV = VoltageStatus_VccAdcToPower_mV(
+        samples[ADC_STATUS_BUS_INDEX], samples[ADC_STATUS_VREFINT_INDEX]);
     /* INA181 REF is tied to GND; PA4 is NC and is not part of the ADC scan. */
     /* INA181 REF 接地；PA4 为 NC，不参与 ADC 扫描和电流偏置计算。 */
     VoltageStatus->param->INA181REF_mV=0U;
@@ -244,7 +315,9 @@ void VoltageStatus_AnalyzeData(VoltageStatus* VoltageStatus)
      * 本板低侧分流电阻和 INA181 参考连接测量的是电流幅值。差值必须先按有符号数
      * 计算，避免零电流偏置导致无符号下溢并变成很大的电流。
      */
-    VoltageStatus->param->Temp=STM32_Temp_Calc(samples[2],samples[3])-10;
+    VoltageStatus->param->Temp = (int8_t)(STM32_Temp_Calc(
+        samples[ADC_STATUS_TEMPERATURE_INDEX],
+        samples[ADC_STATUS_VREFINT_INDEX]) - 10);
 
     /*
      * Sample age and 20 ms statistics window folding. The main loop calls this
@@ -296,16 +369,26 @@ void VoltageStatus_DmaIrqHandler(VoltageStatus *status,
 
     if (status == NULL || current_control == NULL || drive == NULL) return;
     param = status->param;
+    VoltageStatus_PublishSnapshot(status);
+    if (!VoltageStatus_IsFrameValid(
+            (const uint16_t *)status->adc_snapshot))
+    {
+        param->CurrentSampleValid = false;
+        return;
+    }
     measured_mA = CurrentSenseModel_AdcToMilliamp(
-        param->VoltageBuf[0], status->current_offset_adc,
-        param->VoltageBuf[3]);
+        status->adc_snapshot[ADC_STATUS_CURRENT_INDEX],
+        status->current_offset_adc,
+        status->adc_snapshot[ADC_STATUS_VREFINT_INDEX]);
     sample_drive_mode = current_control->output_mode;
     sample_drive_sign = VoltageStatus_DriveSign(
         current_control->output_power);
     sample_valid = CurrentSenseModel_IsSampleValid(
+        (uint16_t)LL_TIM_GetAutoReload(drive->timer),
         current_control->output_power, sample_drive_mode);
     sample_context_changed = sample_valid &&
-        (status->sample_drive_mode != sample_drive_mode ||
+        (!status->sample_valid ||
+         status->sample_drive_mode != sample_drive_mode ||
          status->sample_drive_sign != sample_drive_sign);
 
     /* Prime a new bridge context with one sample, but never let that first
@@ -348,8 +431,7 @@ void VoltageStatus_DmaIrqHandler(VoltageStatus *status,
     output = CurrentControl_Step(current_control, filtered_mA,
                                  control_sample_valid);
     param->CurrentHardLimitActive = output.hard_limit_active;
-    param->CurrentPeakLimitActive = output.peak_limit_active;
-    param->CurrentAverage_mA = output.average_current_mA;
+    param->CurrentPeakLimitActive = output.hard_limit_active;
     param->CurrentPeakChopEvents = current_control->peak_chop_events;
 
     /* Diagnostics: raw ADC, qualified instantaneous sample, rolling window,
@@ -360,7 +442,7 @@ void VoltageStatus_DmaIrqHandler(VoltageStatus *status,
         /* Keep the raw code paired with the newest qualified current sample.
          * Invalid coast/stop scans must not overwrite the evidence after a
          * hard-limit trip. */
-        param->CurrentAdcRaw = param->VoltageBuf[0];
+        param->CurrentAdcRaw = status->adc_snapshot[ADC_STATUS_CURRENT_INDEX];
         param->CurrentInstant_mA = measured_mA;
         param->CurrentSampleAgeMs = 0U;
         if (status->window_valid == 0U)
@@ -414,6 +496,7 @@ void VoltageStatus_UpdateLogicalCurrent(VoltageStatus* VoltageStatus)
 
     if (!param->OutputEnabled && param->DriveRunMode == 0U)
     {
+        param->CurrentAverage_mA = 0;
         param->CurrentLogical_mA = 0;
         param->CurrentSampleValid = false;
         param->CurrentEstimated = false;
@@ -421,33 +504,68 @@ void VoltageStatus_UpdateLogicalCurrent(VoltageStatus* VoltageStatus)
     }
 
     int32_t logical_current = 0;
+    int16_t logical_duty;
+    int16_t model_current;
+    bool model_valid = false;
+    bool regenerative_braking;
 
     param->CurrentEstimated = false;
 
-    /*
-     * The shunt reports magnitude only. Active PWM uses the final physical
-     * command plus the complete-axis direction. Brake current has no PWM
-     * sign, so its logical torque direction is opposite the corrected speed.
-     * Coast/stop reports zero logical current.
-     *
-     * 分流采样只有幅值。主动 PWM 驱动时，根据最终物理指令和编码器方向恢复逻辑符号；
-     * 滑行或刹车状态没有明确的电流方向，因此返回 0，避免伪造双向实测值。
-     */
-    if (param->CurrentSampleAgeMs <= 3U &&
-        (param->CurrentAverage_mA > 0 || param->CurrentSampleValid))
+    /* The ground shunt observes the active-window peak, not cycle-average
+     * winding current. Slow-decay PWM has a defined average terminal voltage,
+     * so estimate average current from the voltage actually applied after
+     * saturation/chopping. Keep the measured peak exclusively in diagnostics
+     * and protection. */
+    logical_duty = param->EncoderVeer
+        ? (int16_t)-param->DrivePower
+        : param->DrivePower;
+    regenerative_braking = (param->CurrentLoopStatus & 0x0080U) != 0U;
+    if (regenerative_braking)
     {
-        logical_current = param->CurrentAverage_mA;
-        if (param->ExpectMA < 0) logical_current = -logical_current;
-        /* The magnitude observer is corrected by active-window measurements;
-         * only its sign is reconstructed from the requested bridge direction. */
+        int32_t current_magnitude = param->ExpectMA;
+
+        /* CurrentLoopStatus is published before the PWM ISR applies mode 1.
+         * During that one-tick handover DriveRunMode may still say mode 2; do
+         * not feed the stale bridge state into the R/Ke motoring equation. */
+        logical_current = param->ExpectMA;
+        if (current_magnitude < 0) current_magnitude = -current_magnitude;
+        if (current_magnitude > INT16_MAX) current_magnitude = INT16_MAX;
+        param->CurrentAverage_mA = (int16_t)current_magnitude;
         param->CurrentEstimated = true;
+        model_valid = true;
     }
-    else if ((param->DriveRunMode == 1U) && (param->EncoderSpeed != 0))
+    else if (CurrentSenseModel_CanEstimateFromAverageDuty(
+                 param->DriveRunMode, regenerative_braking))
     {
-        /* Dynamic braking torque opposes the corrected logical speed. */
-        /* 动态制动转矩与校正后的逻辑速度方向相反。 */
-        logical_current = (param->EncoderSpeed > 0) ?
-                          -param->INA181_mA : param->INA181_mA;
+        model_current = MotorTorqueModel_DutyToCurrent(
+            &param->MotorTorqueParams, logical_duty, param->VCC_mV,
+            param->EncoderSpeed, param->TorqueEncoderCountsPerRev,
+            param->MotorWindingTemperature_C, &model_valid);
+        if (model_valid)
+        {
+            logical_current = model_current;
+            param->CurrentAverage_mA = model_current == INT16_MIN
+            ? INT16_MAX
+                : (model_current < 0 ? (int16_t)-model_current : model_current);
+            param->CurrentEstimated = true;
+        }
+    }
+    if (!model_valid)
+    {
+        param->CurrentAverage_mA = 0;
+        if (param->DriveRunMode == 1U)
+        {
+            int32_t current_magnitude = param->ExpectMA;
+
+            /* Brake/coast has no qualified shunt sample: switching-edge INA181
+             * peaks are not cycle-average winding current.  Publish the model
+             * target explicitly as an estimate instead of inventing feedback. */
+            logical_current = param->ExpectMA;
+            if (current_magnitude < 0) current_magnitude = -current_magnitude;
+            if (current_magnitude > INT16_MAX) current_magnitude = INT16_MAX;
+            param->CurrentAverage_mA = (int16_t)current_magnitude;
+            param->CurrentEstimated = true;
+        }
     }
 
     if (logical_current > INT16_MAX)

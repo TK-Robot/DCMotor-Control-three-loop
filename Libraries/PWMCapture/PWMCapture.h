@@ -12,9 +12,9 @@
 
 #include "tim.h"
 
-#define PWM_INPUT_VALID_MIN_US  900U  ///< Accepted low-pulse lower bound. / 可接受低脉宽下限。
-#define PWM_INPUT_VALID_MAX_US 2100U  ///< Accepted low-pulse upper bound. / 可接受低脉宽上限。
-#define PWM_INPUT_TIMEOUT_MS    100U  ///< Signal-loss disarm timeout. / 输入丢失撤销使能超时。
+#define PWM_INPUT_VALID_MIN_US  900U  ///< Accepted active-high pulse lower bound. / 可接受高电平脉宽下限。
+#define PWM_INPUT_VALID_MAX_US 2100U  ///< Accepted active-high pulse upper bound. / 可接受高电平脉宽上限。
+#define PWM_INPUT_TIMEOUT_MS      15U ///< About five missing 330 Hz frames. / 约五帧 330 Hz 丢失后撤销使能。
 
 /**
  * @brief Runtime state for one PWM input capture channel.
@@ -24,8 +24,7 @@ typedef struct
 {
     uint16_t CaptureOneUpTime;   ///< First rising-edge timestamp. / 第一次上升沿时间戳。
     uint16_t CaptureOneDownTime; ///< Falling-edge timestamp. / 下降沿时间戳。
-    uint16_t CaptureTwoUpTime;   ///< Second rising-edge timestamp. / 第二次上升沿时间戳。
-    volatile uint16_t DutyRatio; ///< Captured low-level width in microseconds. / 捕获的低电平宽度，单位微秒。
+    volatile uint16_t DutyRatio; ///< Captured high-level width in microseconds. / 捕获的高电平宽度，单位微秒。
     volatile uint16_t SignalAgeMs; ///< Time since the latest complete pulse. / 最近完整脉冲后的毫秒数。
     uint8_t EdgeNumber;          ///< Capture state machine step. / 捕获状态机步骤。
     TIM_TypeDef *timer;          ///< Timer input-capture instance. / 输入捕获定时器实例。

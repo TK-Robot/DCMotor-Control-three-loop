@@ -36,7 +36,7 @@ void AD116_init(AD116 *ad116, TIM_TypeDef *timer, const uint32_t channel1,
     LL_TIM_OC_SetMode(timer, LL_TIM_CHANNEL_CH4, LL_TIM_OCMODE_PWM2);
     LL_TIM_OC_SetCompareCH4(timer,
         CurrentSenseModel_TriggerCompare((uint16_t)LL_TIM_GetAutoReload(timer),
-                                         0, 0U));
+                                         0U, 0U));
     LL_TIM_OC_EnablePreload(timer, LL_TIM_CHANNEL_CH4);
     LL_TIM_SetTriggerOutput(timer, LL_TIM_TRGO_OC4REF);
     LL_TIM_CC_EnableChannel(timer, channel1 | channel2 | LL_TIM_CHANNEL_CH4);
@@ -51,7 +51,9 @@ void AD116_setTimerFrequency(const AD116* ad116, const uint32_t psc, const uint3
     LL_TIM_SetCounter(ad116->timer, 0U);
     LL_TIM_OC_SetCompareCH4(ad116->timer,
         CurrentSenseModel_TriggerCompare((uint16_t)arr,
-                                         ad116->param->DrivePower,
+                                         CurrentSenseModel_DutyTicks(
+                                             (uint16_t)arr,
+                                             ad116->param->DrivePower),
                                          ad116->param->DriveRunMode));
     LL_TIM_GenerateEvent_UPDATE(ad116->timer);
     LL_TIM_CC_EnableChannel(ad116->timer,
@@ -89,6 +91,11 @@ void AD116_ApplyPwm(AD116 *ad116, int16_t power_permille,
     duty_ticks = CurrentSenseModel_DutyTicks(
         (uint16_t)LL_TIM_GetAutoReload(ad116->timer),
         ad116->param->DrivePower);
+    LL_TIM_OC_SetCompareCH4(ad116->timer,
+        CurrentSenseModel_TriggerCompare(
+            (uint16_t)LL_TIM_GetAutoReload(ad116->timer),
+            duty_ticks,
+            ad116->param->DriveRunMode));
     if (ad116->param->DriveRunMode == 0)
     {
         /* Coast mode: both outputs disabled. */

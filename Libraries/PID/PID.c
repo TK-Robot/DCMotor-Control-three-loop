@@ -3,9 +3,7 @@
 #include <limits.h>
 #include <stdlib.h>
 
-#define CURRENT_FEEDBACK_ARM_UPDATES 2L
 #define SPEED_BREAKAWAY_KI_MULTIPLIER 4U
-#define SPEED_BREAKAWAY_TARGET_MULTIPLIER 3L
 
 void PID_Init(Param *param)
 {
@@ -16,11 +14,11 @@ void PID_Init(Param *param)
     param->Pid_Pos.out_max = 30000;
     param->Pid_Pos.integral_max = 35000;
 
-    param->Pid_PosVel.Kp = 80;
-    param->Pid_PosVel.Ki = 5;
+    param->Pid_PosVel.Kp = 120;
+    param->Pid_PosVel.Ki = 10;
     param->Pid_PosVel.Kd = 0;
     param->Pid_PosVel.out_min = 0;
-    param->Pid_PosVel.out_max = 400;
+    param->Pid_PosVel.out_max = SPEED_PID_OUTPUT_MAX_MA;
     param->Pid_PosVel.integral_max = 8000;
 
     param->Pid_PosEle.Kp = 250;
@@ -46,34 +44,9 @@ void PID_MigrateLegacyCurrentTuning(Param *param)
         param->Pid_PosVel.Ki == 0U &&
         param->Pid_PosVel.Kd == 0U)
     {
-        param->Pid_PosVel.Kp = 80U;
-        param->Pid_PosVel.Ki = 5U;
+        param->Pid_PosVel.Kp = 120U;
+        param->Pid_PosVel.Ki = 10U;
         PID_Reset(&param->Pid_PosVel);
-    }
-    if (param->Pid_PosEle.Kp == 250U &&
-        param->Pid_PosEle.Ki == 30U &&
-        param->Pid_PosEle.Kd == 0U &&
-        param->Pid_PosEle.integral_max == 8000 &&
-        param->Pid_PosEle.out_max == 500U &&
-        param->Pid_PosEle.out_min == 0U)
-    {
-        param->Pid_PosEle.integral_max = 16000;
-    }
-    if (param->Pid_PosEle.Kp > CURRENT_PID_KP_MAX ||
-        param->Pid_PosEle.Ki > CURRENT_PID_KI_MAX ||
-        param->Pid_PosEle.Kd != 0U ||
-        param->Pid_PosEle.integral_max < 0 ||
-        param->Pid_PosEle.integral_max > CURRENT_PID_INTEGRAL_MAX ||
-        param->Pid_PosEle.out_max > CURRENT_PID_VOLTAGE_MAX_MV ||
-        param->Pid_PosEle.out_min > param->Pid_PosEle.out_max)
-    {
-        param->Pid_PosEle.Kp = 250U;
-        param->Pid_PosEle.Ki = 30U;
-        param->Pid_PosEle.Kd = 0U;
-        param->Pid_PosEle.integral_max = 16000;
-        param->Pid_PosEle.out_min = 0U;
-        param->Pid_PosEle.out_max = 500U;
-        PID_Reset(&param->Pid_PosEle);
     }
     if (param->Pid_PosVel.Kd != 0U || param->Pid_PosVel.out_min != 0U)
     {
@@ -148,12 +121,14 @@ static int16_t PID_Vel_Calc(PID_Int* pid, int32_t target, int32_t feedback,
     uint32_t integral_gain = pid->Ki;
 
     error = target - feedback;
+    if (target != 0 && ((target ^ error) < 0)
+        && abs(error) > breakaway_speed_threshold_cps)
+        pid->integral = 0;
     if (output_limit == 0U || output_limit > pid->out_max)
         output_limit = pid->out_max;
-    if (breakaway_speed_threshold_cps != 0U &&
-        abs(target) >= (int32_t)breakaway_speed_threshold_cps
-                       * SPEED_BREAKAWAY_TARGET_MULTIPLIER &&
-        abs(feedback) <= (int32_t)breakaway_speed_threshold_cps)
+    if (breakaway_speed_threshold_cps != 0U && target != 0 &&
+        abs(feedback) <= (int32_t)breakaway_speed_threshold_cps &&
+        error != 0 && ((target ^ error) >= 0))
     {
         integral_gain *= SPEED_BREAKAWAY_KI_MULTIPLIER;
     }
@@ -194,6 +169,8 @@ int32_t PID_PositionLoop(Param *param, int32_t target_position)
     if (abs(error) <= param->PositionDeadbandCounts)
     {
         param->Pid_Pos.integral = 0;
+        param->SpeedRef = 0;
+        param->Pid_PosVel.integral = 0;
         return 0;
     }
     int32_t speed = PID_AbsCalculate(&param->Pid_Pos, target_position, param->EncoderMultiTurnValue);
@@ -208,19 +185,77 @@ static int16_t PID_SpeedLoopLimited(Param *param, int32_t target_speed,
                                     uint16_t update_period_ms,
                                     uint16_t current_limit_mA)
 {
+    bool pulse_density_speed = target_speed != 0
+        && abs(target_speed) <= SPEED_PULSE_DENSITY_MAX_CPS;
     int32_t previous_planned_speed = param->SpeedRef;
-    int32_t planned_speed = SpeedPlan_Update(param, target_speed,
+    int32_t planner_target = target_speed;
+    bool physical_reversal =
+        target_speed != 0 && param->EncoderSpeed != 0
+        && ((target_speed ^ param->EncoderSpeed) < 0)
+        && abs(param->EncoderSpeed)
+           > (int32_t)param->StallSpeedThreshold_cps;
+
+    /* Do not let the reference accelerate through zero while the load-side
+     * encoder still reports motion in the old direction.  With gearbox
+     * backlash, that would build velocity integral before the opposite tooth
+     * face is engaged and release it as an impact. */
+    if (physical_reversal) planner_target = 0;
+    int32_t planned_speed = SpeedPlan_Update(param, planner_target,
                                              update_period_ms);
     if (planned_speed == 0
         || (previous_planned_speed ^ planned_speed) < 0)
     {
         PID_Reset(&param->Pid_PosVel);
     }
+    if (physical_reversal) param->Pid_PosVel.integral = 0;
     int16_t current = PID_Vel_Calc(&param->Pid_PosVel, planned_speed,
                                    param->EncoderSpeed, update_period_ms,
                                    current_limit_mA,
                                    param->StallSpeedThreshold_cps);
-
+    /* Quantize only a sub-breakaway PI demand into same-direction current
+     * pulses.  The PI still sees the real speed target, so a sticky gearbox
+     * phase raises current continuously; off slots must never brake backward.
+     * Pulse amplitude is independent of the sustained-stall threshold: HIL
+     * testing needs 400 mA to cross the measured output-shaft friction peak,
+     * while the 300 mA/3 s average-current stall protection remains active. */
+    if (pulse_density_speed)
+    {
+        if ((current ^ target_speed) < 0)
+        {
+            /* At output-shaft crawl speed, an active reverse brake re-seats
+             * the gearbox on the opposite tooth face after every breakaway.
+             * Coast through small overspeed; retain braking for a runaway. */
+            if (abs(param->EncoderSpeed - target_speed)
+                <= SPEED_CRAWL_COAST_OVERSPEED_CPS)
+            {
+                current = 0;
+            }
+        }
+        else
+        {
+            uint16_t pulse_current_mA = SPEED_LOW_CURRENT_PULSE_MA;
+            if (pulse_current_mA > current_limit_mA)
+                pulse_current_mA = current_limit_mA;
+            if (abs(current) < pulse_current_mA)
+            {
+                param->target_speed += abs(current);
+                if (param->target_speed >= pulse_current_mA)
+                {
+                    param->target_speed -= pulse_current_mA;
+                    current = target_speed > 0
+                            ? (int16_t)pulse_current_mA
+                            : -(int16_t)pulse_current_mA;
+                }
+                else current = 0;
+            }
+            else param->target_speed = 0;
+        }
+    }
+    else
+    {
+        param->target_speed = 0;
+    }
+    if (physical_reversal) param->Pid_PosVel.integral = 0;
     param->EncoderSpeedExpect = planned_speed;
     param->ExpectMA = current;
     return current;
@@ -265,15 +300,12 @@ int16_t PID_CurrentLoop(Param *param, int16_t target_current_mA)
 {
     bool model_valid = false;
     int32_t model_pwm = 0;
-    int32_t model_feedforward_pwm = 0;
     int32_t target_magnitude;
     int32_t target_sign;
-    int32_t correction_mV = 0;
-    int32_t correction_pwm = 0;
     PID_Int *current_pid = &param->Pid_PosEle;
-    bool observable = false;
     bool direction_changed = false;
     bool regenerative_braking = false;
+    uint16_t loop_status = 0U;
 
     if (target_current_mA != 0)
     {
@@ -291,7 +323,8 @@ int16_t PID_CurrentLoop(Param *param, int16_t target_current_mA)
     /* A model voltage opposite to the requested current is regenerative.
      * The ground shunt cannot close a signed-current loop there. Convert the
      * requested braking current into bounded brake/coast PWM from Ke/R and
-     * leave the PI frozen until the motoring quadrant becomes observable. */
+     * leave the PI frozen; the active-window peak is not average current even
+     * after the operating point returns to a motoring quadrant. */
     if ((target_sign > 0L && model_pwm < 0L) ||
         (target_sign < 0L && model_pwm > 0L))
     {
@@ -316,8 +349,6 @@ int16_t PID_CurrentLoop(Param *param, int16_t target_current_mA)
         model_pwm = target_sign * brake_duty;
         regenerative_braking = model_pwm != 0L;
     }
-    model_feedforward_pwm = model_pwm;
-
     if (target_sign == 0L)
     {
         PID_Reset(current_pid);
@@ -325,90 +356,35 @@ int16_t PID_CurrentLoop(Param *param, int16_t target_current_mA)
     else
     {
         direction_changed = current_pid->prev_prev_error != target_sign;
-        observable = !regenerative_braking &&
-            param->CurrentSampleAgeMs <= 3U &&
-            param->CurrentSampleValid &&
-            ((target_sign > 0L && model_pwm > 0) ||
-             (target_sign < 0L && model_pwm < 0));
-
         if (direction_changed)
         {
             PID_Reset(current_pid);
             current_pid->prev_prev_error = target_sign;
         }
-
-        if (observable && !direction_changed)
-        {
-            if (current_pid->prev_feedback < CURRENT_FEEDBACK_ARM_UPDATES)
-            {
-                current_pid->prev_feedback++;
-            }
-            else
-            {
-                correction_mV = PID_AbsCalculate(
-                    current_pid, target_magnitude,
-                    abs(param->CurrentAverage_mA));
-            }
-        }
-        else
-        {
-            current_pid->prev_feedback = 0;
-        }
-    }
-
-    if (param->VCC_mV != 0U)
-    {
-        correction_pwm = correction_mV * target_sign * 1000L
-                       / param->VCC_mV;
-        model_pwm += correction_pwm;
-    }
-    /* Current overshoot may remove drive voltage, but the current regulator
-     * must not command reverse torque merely to discharge the winding. Decay
-     * selection owns that transition. */
-    if ((model_feedforward_pwm > 0L && model_pwm < 0L)
-        || (model_feedforward_pwm < 0L && model_pwm > 0L))
-    {
-        model_pwm = 0L;
+        /* The common low-side shunt reports an active-window peak. Until an
+         * R/L observer converts that peak into cycle-average winding current,
+         * it must not close this average-current PI in any decay mode. */
+        current_pid->prev_feedback = 0;
     }
 
     /* Diagnostics: publish the model feedforward and PI correction separately
      * so the host can attribute every PWM change to feedforward or feedback. */
     /* 诊断：分别发布模型前馈与 PI 修正，使上位机能够解释每次 PWM 变化的来源。 */
-    {
-        uint16_t loop_status = 0U;
-        bool pi_running = observable && !direction_changed
-            && target_sign != 0L
-            && current_pid->prev_feedback >= CURRENT_FEEDBACK_ARM_UPDATES;
-
-        if (pi_running) loop_status |= 0x0001U;
-        if (param->CurrentSampleValid) loop_status |= 0x0002U;
-        if (param->CurrentEstimated) loop_status |= 0x0004U;
-        if (target_sign != 0L && !pi_running) loop_status |= 0x0008U;
-        if (direction_changed) loop_status |= 0x0010U;
-        if (model_pwm >= 1000L || model_pwm <= -1000L) loop_status |= 0x0020U;
-        if (param->CurrentPeakLimitActive) loop_status |= 0x0040U;
-        if (regenerative_braking) loop_status |= 0x0080U;
-        if (pi_running && !param->CurrentPiWasRunning)
-        {
-            /* Frozen -> running transition closes one frozen interval. */
-        }
-        if (!pi_running && param->CurrentPiWasRunning)
-        {
-            param->CurrentPiFrozenCount++;
-        }
-        param->CurrentPiWasRunning = pi_running;
-        param->CurrentLoopStatus = loop_status;
-        param->CurrentCorrectionPwm = (int16_t)correction_pwm;
-        {
-            int32_t model_only = model_pwm - correction_pwm;
-            if (model_only > 1000L) model_only = 1000L;
-            else if (model_only < -1000L) model_only = -1000L;
-            param->CurrentModelPwm = (int16_t)model_only;
-        }
-    }
+    if (param->CurrentSampleValid) loop_status |= 0x0002U;
+    if (param->CurrentEstimated) loop_status |= 0x0004U;
+    if (target_sign != 0L) loop_status |= 0x0008U;
+    if (direction_changed) loop_status |= 0x0010U;
+    if (model_pwm >= 1000L || model_pwm <= -1000L) loop_status |= 0x0020U;
+    if (param->CurrentPeakLimitActive) loop_status |= 0x0040U;
+    if (regenerative_braking) loop_status |= 0x0080U;
+    if (param->CurrentPiWasRunning) param->CurrentPiFrozenCount++;
+    param->CurrentPiWasRunning = false;
+    param->CurrentLoopStatus = loop_status;
+    param->CurrentCorrectionPwm = 0;
 
     if (model_pwm > 1000) model_pwm = 1000;
     else if (model_pwm < -1000) model_pwm = -1000;
+    param->CurrentModelPwm = (int16_t)model_pwm;
 
     param->ExpectMA = target_current_mA;
     if (param->EncoderVeer) model_pwm = -model_pwm;
@@ -439,10 +415,22 @@ int16_t PID_Pos(Param *param)
 int32_t SpeedPlan_Update(Param *param, int32_t SpeedCmd,
                          uint16_t update_period_ms)
 {
-    int32_t dv = SpeedCmd - param->SpeedRef;
-    int32_t dv_limit = (int32_t)(dv > 0 ? param->AccelMax
-                                        : param->DecelMax)
-                     * update_period_ms;
+    int32_t reference = param->SpeedRef;
+    int32_t dv = SpeedCmd - reference;
+    int32_t dv_limit;
+
+    /* A reversal is two physical phases: decelerate to zero, then accelerate
+     * in the opposite direction.  Select Accel/Decel by speed magnitude, not
+     * by the numeric sign of dv, so both motor directions remain symmetric. */
+    if (reference != 0 && ((dv ^ reference) < 0))
+    {
+        if (SpeedCmd != 0 && ((SpeedCmd ^ reference) < 0)) dv = -reference;
+        dv_limit = (int32_t)param->DecelMax * update_period_ms;
+    }
+    else
+    {
+        dv_limit = (int32_t)param->AccelMax * update_period_ms;
+    }
 
     if (dv > 0)
     {

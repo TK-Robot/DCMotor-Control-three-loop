@@ -68,7 +68,7 @@ void MX_ADC1_Init(void)
 
   LL_DMA_SetDataTransferDirection(DMA1, LL_DMA_CHANNEL_1, LL_DMA_DIRECTION_PERIPH_TO_MEMORY);
 
-  LL_DMA_SetChannelPriorityLevel(DMA1, LL_DMA_CHANNEL_1, LL_DMA_PRIORITY_LOW);
+  LL_DMA_SetChannelPriorityLevel(DMA1, LL_DMA_CHANNEL_1, LL_DMA_PRIORITY_VERYHIGH);
 
   LL_DMA_SetMode(DMA1, LL_DMA_CHANNEL_1, LL_DMA_MODE_CIRCULAR);
 
@@ -126,12 +126,12 @@ void MX_ADC1_Init(void)
   ADC_REG_InitStruct.Overrun = LL_ADC_REG_OVR_DATA_PRESERVED;
   LL_ADC_REG_Init(ADC1, &ADC_REG_InitStruct);
   LL_ADC_SetOverSamplingScope(ADC1, LL_ADC_OVS_GRP_REGULAR_CONTINUED);
-  LL_ADC_ConfigOverSamplingRatioShift(ADC1, LL_ADC_OVS_RATIO_16, LL_ADC_OVS_SHIFT_RIGHT_2);
+  LL_ADC_ConfigOverSamplingRatioShift(ADC1, LL_ADC_OVS_RATIO_2, LL_ADC_OVS_SHIFT_NONE);
   LL_ADC_SetOverSamplingDiscont(ADC1, LL_ADC_OVS_REG_CONT);
   LL_ADC_SetTriggerFrequencyMode(ADC1, LL_ADC_CLOCK_FREQ_MODE_HIGH);
   LL_ADC_SetCommonPathInternalCh(__LL_ADC_COMMON_INSTANCE(ADC1), LL_ADC_PATH_INTERNAL_VREFINT|LL_ADC_PATH_INTERNAL_TEMPSENSOR);
-  LL_ADC_SetSamplingTimeCommonChannels(ADC1, LL_ADC_SAMPLINGTIME_COMMON_1, LL_ADC_SAMPLINGTIME_39CYCLES_5);
-  LL_ADC_SetSamplingTimeCommonChannels(ADC1, LL_ADC_SAMPLINGTIME_COMMON_2, LL_ADC_SAMPLINGTIME_79CYCLES_5);
+  LL_ADC_SetSamplingTimeCommonChannels(ADC1, LL_ADC_SAMPLINGTIME_COMMON_1, LL_ADC_SAMPLINGTIME_7CYCLES_5);
+  LL_ADC_SetSamplingTimeCommonChannels(ADC1, LL_ADC_SAMPLINGTIME_COMMON_2, LL_ADC_SAMPLINGTIME_160CYCLES_5);
   LL_ADC_DisableIT_EOC(ADC1);
   LL_ADC_DisableIT_EOS(ADC1);
 
@@ -157,7 +157,32 @@ void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
-  LL_ADC_REG_SetSequencerRanks(ADC1, LL_ADC_REG_RANK_2, LL_ADC_CHANNEL_1);
+  LL_ADC_REG_SetSequencerRanks(ADC1, LL_ADC_REG_RANK_2, LL_ADC_CHANNEL_VREFINT);
+
+   /* Poll for ADC channel configuration ready */
+   #if (USE_TIMEOUT == 1)
+   Timeout = ADC_CHANNEL_CONF_RDY_TIMEOUT_MS;
+   #endif /* USE_TIMEOUT */
+   while (LL_ADC_IsActiveFlag_CCRDY(ADC1) == 0)
+     {
+   #if (USE_TIMEOUT == 1)
+   /* Check Systick counter flag to decrement the time-out value */
+   if (LL_SYSTICK_IsActiveCounterFlag())
+     {
+   if(Timeout-- == 0)
+         {
+   Error_Handler();
+         }
+     }
+   #endif /* USE_TIMEOUT */
+     }
+   /* Clear flag ADC channel configuration ready */
+   LL_ADC_ClearFlag_CCRDY(ADC1);
+  LL_ADC_SetChannelSamplingTime(ADC1, LL_ADC_CHANNEL_VREFINT, LL_ADC_SAMPLINGTIME_COMMON_2);
+
+  /** Configure Regular Channel
+  */
+  LL_ADC_REG_SetSequencerRanks(ADC1, LL_ADC_REG_RANK_3, LL_ADC_CHANNEL_1);
 
    /* Poll for ADC channel configuration ready */
    #if (USE_TIMEOUT == 1)
@@ -182,7 +207,7 @@ void MX_ADC1_Init(void)
 
   /** Configure Regular Channel
   */
-  LL_ADC_REG_SetSequencerRanks(ADC1, LL_ADC_REG_RANK_3, LL_ADC_CHANNEL_TEMPSENSOR);
+  LL_ADC_REG_SetSequencerRanks(ADC1, LL_ADC_REG_RANK_4, LL_ADC_CHANNEL_TEMPSENSOR);
 
    /* Poll for ADC channel configuration ready */
    #if (USE_TIMEOUT == 1)
@@ -204,31 +229,6 @@ void MX_ADC1_Init(void)
    /* Clear flag ADC channel configuration ready */
    LL_ADC_ClearFlag_CCRDY(ADC1);
   LL_ADC_SetChannelSamplingTime(ADC1, LL_ADC_CHANNEL_TEMPSENSOR, LL_ADC_SAMPLINGTIME_COMMON_2);
-
-  /** Configure Regular Channel
-  */
-  LL_ADC_REG_SetSequencerRanks(ADC1, LL_ADC_REG_RANK_4, LL_ADC_CHANNEL_VREFINT);
-
-   /* Poll for ADC channel configuration ready */
-   #if (USE_TIMEOUT == 1)
-   Timeout = ADC_CHANNEL_CONF_RDY_TIMEOUT_MS;
-   #endif /* USE_TIMEOUT */
-   while (LL_ADC_IsActiveFlag_CCRDY(ADC1) == 0)
-     {
-   #if (USE_TIMEOUT == 1)
-   /* Check Systick counter flag to decrement the time-out value */
-   if (LL_SYSTICK_IsActiveCounterFlag())
-     {
-   if(Timeout-- == 0)
-         {
-   Error_Handler();
-         }
-     }
-   #endif /* USE_TIMEOUT */
-     }
-   /* Clear flag ADC channel configuration ready */
-   LL_ADC_ClearFlag_CCRDY(ADC1);
-  LL_ADC_SetChannelSamplingTime(ADC1, LL_ADC_CHANNEL_VREFINT, LL_ADC_SAMPLINGTIME_COMMON_1);
   /* USER CODE BEGIN ADC1_Init 2 */
 
   /* USER CODE END ADC1_Init 2 */

@@ -108,13 +108,21 @@ static void App_ApplySds1601ModelDefaultsIfUnconfigured(Param *param)
     /* New configurations use cycle-by-cycle mixed decay. Existing explicit
      * mode selections remain available for hardware diagnostics. */
   }
+  if (param->MotorTorqueParams.back_emf_uV_per_rpm
+      == SDS1601_INTERIM_BACK_EMF_UV_PER_RPM)
+    param->MotorTorqueParams.back_emf_uV_per_rpm = SDS1601_BACK_EMF_UV_PER_RPM;
+  if (param->Pid_PosVel.out_max == 400U)
+    param->Pid_PosVel.out_max = SPEED_PID_OUTPUT_MAX_MA;
   if (param->TorqueCurrentLimit_mA == 0U)
   {
     param->TorqueCurrentLimit_mA = 400U;
   }
   if (param->MotorInductance_uH == 0U) param->MotorInductance_uH = 10U;
   if (param->CurrentPeakLimit_mA == 0U) param->CurrentPeakLimit_mA = 1500U;
-  if (param->CurrentAbsoluteLimit_mA == 0U) param->CurrentAbsoluteLimit_mA = 1750U;
+  if (param->CurrentAbsoluteLimit_mA == 0U) param->CurrentAbsoluteLimit_mA = 1800U;
+  if (param->TorqueCurrentLimit_mA <= 1830U
+      && param->CurrentAbsoluteLimit_mA < param->TorqueCurrentLimit_mA)
+    param->CurrentAbsoluteLimit_mA = param->TorqueCurrentLimit_mA;
   if (param->StallCurrentThreshold_mA == 0U) param->StallCurrentThreshold_mA = 300U;
   if (param->StallSpeedThreshold_cps == 0U) param->StallSpeedThreshold_cps = 300U;
   if (param->StallConfirmTimeMs == 0U) param->StallConfirmTimeMs = 3000U;
@@ -180,7 +188,7 @@ static void App_DefaultParam(Param *param)
   param->TorqueCurrentLimit_mA = 0U;
   param->MotorInductance_uH = 10U;
   param->CurrentPeakLimit_mA = 1500U;
-  param->CurrentAbsoluteLimit_mA = 1750U;
+  param->CurrentAbsoluteLimit_mA = 1800U;
   param->StallCurrentThreshold_mA = 300U;
   param->StallSpeedThreshold_cps = 300U;
   param->StallConfirmTimeMs = 3000U;
@@ -254,7 +262,7 @@ static void App_DefaultParam(Param *param)
 
 static bool App_ApplyUartBaud(uint32_t baud)
 {
-  if (baud == 115200UL || baud == 500000UL || baud == 1000000UL || baud == 2000000UL)
+  if (baud >= 115200UL && baud <= 2000000UL)
   {
     LL_USART_Disable(USART2);
     LL_USART_SetBaudRate(USART2, SystemCoreClock, LL_USART_PRESCALER_DIV1,
@@ -402,24 +410,16 @@ int main(void)
     {
       int16_t physical_target_mA = Param_KX.ExpectMA;
       CurrentControlElectrical electrical;
-      uint32_t resistance_mOhm = Param_KX.MotorTorqueResult.effective_resistance_mOhm;
       if (Param_KX.EncoderVeer)
         physical_target_mA = (int16_t)-physical_target_mA;
-      if (resistance_mOhm == 0U)
-        resistance_mOhm = Param_KX.MotorTorqueParams.terminal_resistance_mOhm;
-      if (resistance_mOhm > UINT16_MAX) resistance_mOhm = UINT16_MAX;
       electrical = (CurrentControlElectrical){
-        .supply_voltage_mV = Param_KX.VCC_mV,
-        .resistance_mOhm = (uint16_t)resistance_mOhm,
-        .inductance_uH = Param_KX.MotorInductance_uH,
-        .peak_limit_mA = Param_KX.CurrentPeakLimit_mA,
         .absolute_limit_mA = Param_KX.CurrentAbsoluteLimit_mA
       };
       NVIC_DisableIRQ(DMA1_Channel1_IRQn);
       CurrentControl_SetCommand(&CurrentLoop,
                                 Param_KX.OutputEnabled,
                                  physical_target_mA,
-                                 Param_KX.CurrentFeedforwardPwm,
+                                 Param_KX.DrivePower,
                                  (Param_KX.CurrentLoopStatus & 0x0080U) != 0U
                                    ? 1U : Param_KX.DrivePwmMode,
                                  &electrical);

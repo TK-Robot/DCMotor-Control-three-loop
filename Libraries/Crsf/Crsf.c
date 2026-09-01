@@ -184,8 +184,8 @@ static int32_t Crsf_MapPosition(const Param *param, uint16_t raw)
     int32_t center_reference = param->CrsfCenterReference;
     uint16_t clamped = raw;
 
-    if (center_reference < negative_limit) center_reference = negative_limit;
-    if (center_reference > positive_limit) center_reference = positive_limit;
+    if (center_reference < negative_limit || center_reference > positive_limit)
+        return param->EncoderMultiTurnValue;
     if (clamped < param->CrsfChannelMin) clamped = param->CrsfChannelMin;
     if (clamped > param->CrsfChannelMax) clamped = param->CrsfChannelMax;
 
@@ -299,7 +299,6 @@ static void Crsf_StartArmTracking(CrsfContext *context)
 
     if (!context->center_reference_valid)
     {
-        param->CrsfCenterReference = param->EncoderMultiTurnValue;
         context->center_reference_valid = true;
     }
     /* Freeze one target for ARM validation; live channel tracking starts only after ACTIVE. */
@@ -402,8 +401,9 @@ void Crsf_1msTick(CrsfContext *context)
         }
         else
         {
-            context->command.current_limit_mA = 0U;
-            context->command.speed_limit_cps = 0U;
+            /* Keep the configured CRSF safety envelope after arming. */
+            context->command.current_limit_mA = param->CrsfArmCurrentLimit_mA;
+            context->command.speed_limit_cps = param->CrsfArmSpeed_cps;
         }
     }
 

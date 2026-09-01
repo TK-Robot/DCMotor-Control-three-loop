@@ -112,16 +112,16 @@ static uint16_t Dynamixel2_StatusWord(const Dynamixel2Context *context)
      *         11 无故障，12 通信活动。
      */
     uint16_t status = DXL2_STATUS_READY;
+    uint16_t protection = context->param->ProtectionFlags;
 
     if (context->param->PwmInputValid) status |= DXL2_STATUS_PWM_INPUT_VALID;
     if (context->param->OutputEnabled) status |= DXL2_STATUS_OUTPUT_ENABLED;
     if (context->param->FaultCode != DXL2_FAULT_NONE) status |= DXL2_STATUS_FAULT_PRESENT;
-    if (context->param->ProtectionFlags != PROTECTION_NONE)
+    if (protection != PROTECTION_NONE)
         status |= DXL2_STATUS_PROTECTION_INHIBIT;
-    if ((context->param->ProtectionFlags & PROTECTION_UNDERVOLTAGE) != 0U)
-        status |= DXL2_STATUS_UNDERVOLTAGE;
-    if ((context->param->ProtectionFlags & PROTECTION_OVERTEMPERATURE) != 0U)
-        status |= DXL2_STATUS_OVERTEMPERATURE;
+    status |= (uint16_t)((protection & (PROTECTION_UNDERVOLTAGE
+                                       | PROTECTION_OVERTEMPERATURE)) << 5U);
+    status |= (uint16_t)((protection & PROTECTION_OVERCURRENT) << 4U);
     if (context->param->ControlSource == CONTROL_SOURCE_PWM_INPUT) status |= DXL2_STATUS_PWM_SOURCE;
     if (context->param->ControlSource == CONTROL_SOURCE_SERIAL) status |= DXL2_STATUS_SERIAL_SOURCE;
     if (context->param->ControlSource == CONTROL_SOURCE_CRSF) status |= DXL2_STATUS_CRSF_SOURCE;
@@ -176,26 +176,27 @@ static void Dynamixel2_PublishStatusSnapshot(Dynamixel2Context *context)
     context->status_snapshot_index = next;
 }
 
+static const uint32_t Dynamixel2_BaudRates[] =
+{
+    115200UL, 1000000UL, 2000000UL, 230400UL, 420000UL
+};
+
 static uint8_t Dynamixel2_BaudCode(uint32_t baud)
 {
-    switch (baud)
+    uint8_t index;
+
+    for (index = 0U; index < sizeof(Dynamixel2_BaudRates) / sizeof(Dynamixel2_BaudRates[0]); index++)
     {
-    case 115200UL: return 2U;
-    case 1000000UL: return 3U;
-    case 2000000UL: return 4U;
-    default: return 2U;
+        if (Dynamixel2_BaudRates[index] == baud) return (uint8_t)(index + 2U);
     }
+    return 2U;
 }
 
 static bool Dynamixel2_BaudFromCode(uint8_t code, uint32_t *baud)
 {
-    switch (code)
-    {
-    case 2U: *baud = 115200UL; return true;
-    case 3U: *baud = 1000000UL; return true;
-    case 4U: *baud = 2000000UL; return true;
-    default: return false;
-    }
+    if (code < 2U || code > 6U) return false;
+    *baud = Dynamixel2_BaudRates[code - 2U];
+    return true;
 }
 
 static PID_Int *Dynamixel2_PidForBase(Dynamixel2Context *context, uint16_t base)
@@ -268,7 +269,7 @@ static void Dynamixel2_BuildControlTable(const Dynamixel2Context *context,
     Dynamixel2_WriteU16(&table[DXL2_ADDR_ENCODER_OFFSET_COUNT], context->param->EncoderOffset);
     table[DXL2_ADDR_FAIL_SAFE_POLICY] = context->param->FailSafePolicy;
     Dynamixel2_WriteU32(&table[DXL2_ADDR_CURRENT_TICK_MS], context->tick_ms);
-    Dynamixel2_WriteU16(&table[DXL2_ADDR_PWM_INPUT_LOW_US], context->param->DutyRatio);
+    Dynamixel2_WriteU16(&table[DXL2_ADDR_PWM_INPUT_PULSE_US], context->param->DutyRatio);
 
     Dynamixel2_WriteU16(&table[128], context->last_diag_error);
     Dynamixel2_WriteU32(&table[130], context->diagnostic_error_count);
@@ -528,7 +529,7 @@ static uint8_t Dynamixel2_WriteCommandBlock(Dynamixel2Context *context,
     uint16_t sequence = length == DXL2_FULL_COMMAND_IMAGE_SIZE
                             ? Dynamixel2_ReadU16(&data[18]) : 0U;
 
-    if (source > CONTROL_SOURCE_CRSF || mode > SERVO_MODE_TORQUE
+    if (source > CONTROL_SOURCE_CRSF || mode > SERVO_MODE_PWM_DUTY
         || (control_word & (uint16_t)~(DXL2_CONTROL_ENABLE
                                       | DXL2_CONTROL_USE_EXECUTE_TICK
                                       | DXL2_CONTROL_CLEAR_FAULT
@@ -657,7 +658,7 @@ static uint8_t Dynamixel2_WriteCommand(Dynamixel2Context *context, uint16_t addr
         return DXL2_ERROR_NONE;
     case 17U:
         if (length != 1U) return DXL2_ERROR_DATA_LENGTH;
-        if (data[0] > SERVO_MODE_TORQUE) return DXL2_ERROR_DATA_RANGE;
+        if (data[0] > SERVO_MODE_PWM_DUTY) return DXL2_ERROR_DATA_RANGE;
         if (apply)
         {
             context->pending_command.mode = (ServoMode)data[0];
@@ -1025,6 +1026,8 @@ static uint8_t Dynamixel2_WriteCrsfConfig(Dynamixel2Context *context,
                 param->CrsfNegativePositionLimit = signed_value;
             else
                 param->CrsfPositivePositionLimit = signed_value;
+            param->CrsfCenterReference = (param->CrsfNegativePositionLimit
+                                          + param->CrsfPositivePositionLimit) >> 1;
         }
         break;
     default:
@@ -1880,9 +1883,9 @@ static void Dynamixel2_DiscardStreamPrefix(Dynamixel2Context *context,
         context->rx_stream_length = 0U;
         return;
     }
-    memmove(context->rx_stream, &context->rx_stream[count],
-            (uint16_t)(context->rx_stream_length - count));
     context->rx_stream_length = (uint16_t)(context->rx_stream_length - count);
+    for (uint16_t index = 0U; index < context->rx_stream_length; ++index)
+        context->rx_stream[index] = context->rx_stream[count + index];
 }
 
 static void Dynamixel2_ConsumeStream(Dynamixel2Context *context)

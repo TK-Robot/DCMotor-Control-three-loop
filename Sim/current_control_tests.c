@@ -7,10 +7,6 @@
 static int failures;
 
 static const CurrentControlElectrical electrical = {
-    .supply_voltage_mV = 8200U,
-    .resistance_mOhm = 2650U,
-    .inductance_uH = 0U,
-    .peak_limit_mA = 1500U,
     .absolute_limit_mA = 1750U
 };
 
@@ -50,25 +46,21 @@ static void test_uncalibrated_inductance_does_not_limit_voltage(void)
 {
     CurrentControl control;
     CurrentControlOutput output;
-    CurrentControlElectrical limited = electrical;
 
-    limited.inductance_uH = 10U;
     CurrentControl_Init(&control);
-    CurrentControl_SetCommand(&control, true, 400, 200, 4U, &limited);
+    CurrentControl_SetCommand(&control, true, 400, 200, 4U, &electrical);
     output = CurrentControl_Step(&control, 0, false);
     CHECK(output.power_permille == 200);
     CHECK(output.drive_mode == 2U);
-    CHECK(!output.peak_limit_active);
 
     CurrentControl_Init(&control);
-    CurrentControl_SetCommand(&control, true, -400, -200, 4U, &limited);
+    CurrentControl_SetCommand(&control, true, -400, -200, 4U, &electrical);
     output = CurrentControl_Step(&control, 0, false);
     CHECK(output.power_permille == -200);
     CHECK(output.drive_mode == 2U);
-    CHECK(!output.peak_limit_active);
 }
 
-static void test_sample_reconstructs_cycle_average(void)
+static void test_peak_sample_does_not_become_cycle_average(void)
 {
     CurrentControl control;
     CurrentControlOutput output;
@@ -78,13 +70,10 @@ static void test_sample_reconstructs_cycle_average(void)
     output = CurrentControl_Step(&control, 100, true);
     CHECK(output.power_permille == 100);
     CHECK(output.drive_mode == 2U);
-    CHECK(output.average_current_mA > 0);
 
     output = CurrentControl_Step(&control, 300, true);
     CHECK(output.power_permille == 100);
-    CHECK(output.drive_mode == 3U);
-    CHECK(control.last_measured_mA == 300);
-    CHECK(output.average_current_mA > 0);
+    CHECK(output.drive_mode == 2U);
 }
 
 static void test_unqualified_samples_do_not_change_voltage_command(void)
@@ -114,14 +103,12 @@ static void test_reversal_forces_decay(void)
     output = CurrentControl_Step(&control, 1600, true);
     CHECK(output.power_permille == 0);
     CHECK(output.drive_mode == 0U);
-    CHECK(!output.peak_limit_active);
     CHECK(control.peak_chop_events == 0U);
     for (uint8_t cycle = 1U;
          cycle < CURRENT_CONTROL_REVERSAL_COAST_CYCLES; ++cycle)
     {
         output = CurrentControl_Step(&control, 1600, true);
         CHECK(output.power_permille == 0);
-        CHECK(!output.peak_limit_active);
         CHECK(control.peak_chop_events == 0U);
     }
     output = CurrentControl_Step(&control, 0, false);
@@ -135,12 +122,10 @@ static void test_reversal_forces_decay(void)
          cycle < CURRENT_CONTROL_AUTO_FAST_HOLD_CYCLES; ++cycle)
     {
         output = CurrentControl_Step(&control, 1600, true);
-        CHECK(!output.peak_limit_active);
         CHECK(control.peak_chop_events == 0U);
     }
     output = CurrentControl_Step(&control, 1600, true);
-    CHECK(output.peak_limit_active);
-    CHECK(control.peak_chop_events == 1U);
+    CHECK(control.peak_chop_events == 0U);
 
     CurrentControl_Init(&control);
     CurrentControl_SetCommand(&control, true, -200, -100, 4U, &electrical);
@@ -151,19 +136,16 @@ static void test_reversal_forces_decay(void)
     {
         output = CurrentControl_Step(&control, 1600, true);
         CHECK(output.power_permille == 0);
-        CHECK(!output.peak_limit_active);
         CHECK(control.peak_chop_events == 0U);
     }
     for (uint8_t cycle = 0U;
          cycle < CURRENT_CONTROL_AUTO_FAST_HOLD_CYCLES; ++cycle)
     {
         output = CurrentControl_Step(&control, 1600, true);
-        CHECK(!output.peak_limit_active);
         CHECK(control.peak_chop_events == 0U);
     }
     output = CurrentControl_Step(&control, 1600, true);
-    CHECK(output.peak_limit_active);
-    CHECK(control.peak_chop_events == 1U);
+    CHECK(control.peak_chop_events == 0U);
 
     /* Absolute protection remains active while reversal coast owns output. */
     CurrentControl_Init(&control);
@@ -175,7 +157,7 @@ static void test_reversal_forces_decay(void)
     CHECK(output.power_permille == 0);
 }
 
-static void test_auto_decay_uses_qualified_overshoot(void)
+static void test_auto_decay_does_not_compare_peak_with_average_target(void)
 {
     CurrentControl control;
     CurrentControlOutput output;
@@ -185,14 +167,6 @@ static void test_auto_decay_uses_qualified_overshoot(void)
     (void)CurrentControl_Step(&control, 0, false);
     for (uint8_t cycle = 0U; cycle < 16U; ++cycle)
         output = CurrentControl_Step(&control, 800, true);
-    CHECK(output.drive_mode == 3U);
-
-    for (uint8_t cycle = 0U;
-         cycle < CURRENT_CONTROL_AUTO_FAST_HOLD_CYCLES
-             && output.drive_mode == 3U; ++cycle)
-        output = CurrentControl_Step(&control, 100, true);
-    for (uint8_t cycle = 0U; cycle < 64U && output.drive_mode != 2U; ++cycle)
-        output = CurrentControl_Step(&control, 100, true);
     CHECK(output.drive_mode == 2U);
 }
 
@@ -253,7 +227,7 @@ static void test_model_brake_uses_brake_coast_mode(void)
     CHECK(output.drive_mode == 1U);
 }
 
-static void test_peak_chop_and_absolute_limit(void)
+static void test_absolute_guard_is_non_latching(void)
 {
     CurrentControl control;
     CurrentControlOutput output;
@@ -262,17 +236,24 @@ static void test_peak_chop_and_absolute_limit(void)
     CurrentControl_SetCommand(&control, true, 500, 300, 4U, &electrical);
     (void)CurrentControl_Step(&control, 0, false);
     output = CurrentControl_Step(&control, 1501, true);
-    CHECK(output.power_permille == 0);
-    CHECK(output.drive_mode == 0U);
-    CHECK(output.peak_limit_active);
+    CHECK(output.power_permille == 300);
+    CHECK(output.drive_mode == 2U);
     CHECK(!output.hard_limit_active);
-    CHECK(control.peak_chop_events == 1U);
+    CHECK(control.peak_chop_events == 0U);
 
     output = CurrentControl_Step(&control, 1750, true);
+    CHECK(output.power_permille == 0);
+    CHECK(output.drive_mode == 0U);
     CHECK(output.hard_limit_active);
+    CHECK(control.peak_chop_events == 1U);
+
+    output = CurrentControl_Step(&control, 0, false);
+    CHECK(output.power_permille == 300);
+    CHECK(output.drive_mode == 2U);
+    CHECK(!output.hard_limit_active);
 }
 
-static void test_single_filtered_spike_does_not_trip(void)
+static void test_single_filtered_spike_does_not_reach_guard(void)
 {
     CurrentControl control;
     CurrentControlOutput output;
@@ -285,34 +266,10 @@ static void test_single_filtered_spike_does_not_trip(void)
 
     output = CurrentControl_Step(
         &control, (int16_t)LPF_Filter_Update(&filter, 1754), true);
-    CHECK(!output.peak_limit_active);
     CHECK(!output.hard_limit_active);
     output = CurrentControl_Step(
         &control, (int16_t)LPF_Filter_Update(&filter, 400), true);
-    CHECK(!output.peak_limit_active);
     CHECK(!output.hard_limit_active);
-}
-
-static void test_sustained_filtered_overcurrent_trips(void)
-{
-    CurrentControl control;
-    CurrentControlOutput output;
-    LPF_Filter filter;
-
-    CurrentControl_Init(&control);
-    CurrentControl_SetCommand(&control, true, 100, 300, 4U, &electrical);
-    LPF_Filter_Init(&filter, 128U);
-    filter.prev_output = 400;
-
-    for (uint8_t sample = 0U; sample < 4U; ++sample)
-    {
-        output = CurrentControl_Step(
-            &control, (int16_t)LPF_Filter_Update(&filter, 1830), true);
-        CHECK(!output.hard_limit_active);
-    }
-    output = CurrentControl_Step(
-        &control, (int16_t)LPF_Filter_Update(&filter, 1830), true);
-    CHECK(output.hard_limit_active);
 }
 
 int main(void)
@@ -320,17 +277,16 @@ int main(void)
     test_disabled_output();
     test_low_duty_preserves_requested_voltage();
     test_uncalibrated_inductance_does_not_limit_voltage();
-    test_sample_reconstructs_cycle_average();
+    test_peak_sample_does_not_become_cycle_average();
     test_unqualified_samples_do_not_change_voltage_command();
     test_reversal_forces_decay();
-    test_auto_decay_uses_qualified_overshoot();
+    test_auto_decay_does_not_compare_peak_with_average_target();
     test_low_duty_auto_decay_starts_slow();
     test_auto_decay_reacts_to_target_drop();
     test_explicit_decay_modes_are_not_automatic();
     test_model_brake_uses_brake_coast_mode();
-    test_peak_chop_and_absolute_limit();
-    test_single_filtered_spike_does_not_trip();
-    test_sustained_filtered_overcurrent_trips();
+    test_absolute_guard_is_non_latching();
+    test_single_filtered_spike_does_not_reach_guard();
 
     if (failures != 0)
     {

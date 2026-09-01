@@ -23,7 +23,7 @@
 #define NVM_PARAM_COMMIT_MAGIC       (0x54494D43UL)
 #define NVM_PARAM_LOW_SPEED_MARKER8  (0x4CU)
 #define NVM_PARAM_LOW_SPEED_MARKER16 (0x5343U)
-#define NVM_PARAM_VERSION            (7U)
+#define NVM_PARAM_VERSION            (8U)
 #define NVM_PARAM_CRC_INIT           (0xFFFFFFFFUL)
 #define NVM_PARAM_CRC_POLY           (0xEDB88320UL)
 #define NVM_FLASH_KEY1               (0x45670123UL)
@@ -33,6 +33,15 @@
                                       FLASH_SR_SIZERR | FLASH_SR_PGSERR | \
                                       FLASH_SR_MISERR | FLASH_SR_FASTERR | \
                                       FLASH_SR_OPTVERR)
+
+typedef struct
+{
+    uint32_t magic;
+    uint16_t version;
+    uint16_t data_size;
+    uint32_t sequence;
+    uint32_t crc32;
+} NvmParamRecordHeader;
 
 typedef struct
 {
@@ -53,8 +62,9 @@ enum
 
 _Static_assert(sizeof(NvmParamRecord) <= NVM_PARAM_FLASH_PAGE_BYTES, "NVM record is larger than one Flash page");
 _Static_assert(NVM_PARAM_SLOT_COUNT > 0, "NVM Flash page cannot hold one record");
-_Static_assert(sizeof(Param_SaveData) == 220U,
-               "v7 parameter payload layout changed without a version bump");
+_Static_assert(sizeof(Param_SaveData) == 252U,
+               "v8 parameter payload layout changed without a version bump");
+_Static_assert(sizeof(NvmParamRecordHeader) == 16U, "NVM record header layout changed");
 
 static uint32_t NvmParam_Crc32Update(uint32_t crc, const void *data, uint32_t size)
 {
@@ -79,14 +89,15 @@ static uint32_t NvmParam_Crc32Update(uint32_t crc, const void *data, uint32_t si
     return crc;
 }
 
-static uint32_t NvmParam_CalcCrc(const NvmParamRecord *record)
+static uint32_t NvmParam_CalcRawCrc(const NvmParamRecordHeader *header,
+                                    const void *data)
 {
     uint32_t crc = NVM_PARAM_CRC_INIT;
 
-    crc = NvmParam_Crc32Update(crc, &record->version, sizeof(record->version));
-    crc = NvmParam_Crc32Update(crc, &record->data_size, sizeof(record->data_size));
-    crc = NvmParam_Crc32Update(crc, &record->sequence, sizeof(record->sequence));
-    crc = NvmParam_Crc32Update(crc, &record->data, sizeof(record->data));
+    crc = NvmParam_Crc32Update(crc, &header->version, sizeof(header->version));
+    crc = NvmParam_Crc32Update(crc, &header->data_size, sizeof(header->data_size));
+    crc = NvmParam_Crc32Update(crc, &header->sequence, sizeof(header->sequence));
+    crc = NvmParam_Crc32Update(crc, data, header->data_size);
 
     return ~crc;
 }
@@ -98,34 +109,16 @@ static bool NvmParam_IsSlotErased(uint32_t address)
     return *slot == UINT64_MAX;
 }
 
-static const NvmParamRecord *NvmParam_RecordAt(uint32_t slot_index)
+static bool NvmParam_IsRecordValid(const NvmParamRecordHeader *record)
 {
-    return (const NvmParamRecord *)(NVM_PARAM_FLASH_ADDR + (slot_index * (uint32_t)NVM_PARAM_SLOT_SIZE));
-}
+    const uint8_t *data = (const uint8_t *)record + sizeof(*record);
+    const uint32_t *commit = (const uint32_t *)(data + sizeof(Param_SaveData));
 
-static bool NvmParam_IsRecordValid(const NvmParamRecord *record)
-{
-    if (record->magic != NVM_PARAM_MAGIC)
-    {
-        return false;
-    }
-
-    if (record->commit_magic != NVM_PARAM_COMMIT_MAGIC)
-    {
-        return false;
-    }
-
-    if (record->version != NVM_PARAM_VERSION)
-    {
-        return false;
-    }
-
-    if (record->data_size != sizeof(Param_SaveData))
-    {
-        return false;
-    }
-
-    return record->crc32 == NvmParam_CalcCrc(record);
+    return record->magic == NVM_PARAM_MAGIC
+        && record->version == NVM_PARAM_VERSION
+        && record->data_size == sizeof(Param_SaveData)
+        && *commit == NVM_PARAM_COMMIT_MAGIC
+        && record->crc32 == NvmParam_CalcRawCrc(record, data);
 }
 
 static void NvmParam_CopyPidToSave(PID_SaveParam *dst, const PID_Int *src)
@@ -154,10 +147,10 @@ static void NvmParam_CopyPidFromSave(PID_Int *dst, const PID_SaveParam *src)
     dst->prev_out = 0;
 }
 
+
 static bool NvmParam_IsSupportedBaud(uint32_t baud)
 {
-    return (baud == 115200UL) || (baud == 500000UL) ||
-           (baud == 1000000UL) || (baud == 2000000UL);
+    return baud >= 115200UL && baud <= 2000000UL;
 }
 
 static uint8_t NvmParam_ClampNodeCount(uint8_t node_count)
@@ -187,12 +180,10 @@ static void NvmParam_FillSaveData(Param_SaveData *data, const Param *param)
     NvmParam_CopyPidToSave(&data->Pid_PosEle, &param->Pid_PosEle);
     memcpy(data->LowSpeedCompMap_mA, param->LowSpeedCompMap_mA,
            sizeof(data->LowSpeedCompMap_mA));
-
     data->CycleTimeMs = param->CycleTimeMs;
     data->TempLimit = param->TempLimit;
 
     data->EncoderOffset = param->EncoderOffset;
-    data->LowSpeedCompEnable = 0U;
     data->PositionDeadbandCounts = param->PositionDeadbandCounts;
     data->LowSpeedCompMaxSpeed_cps = param->LowSpeedCompMaxSpeed_cps;
     data->SpeedMax = param->SpeedMax;
@@ -326,6 +317,8 @@ static void NvmParam_ApplySaveData(Param *param, const Param_SaveData *data)
     {
         param->CrsfNegativePositionLimit = data->CrsfNegativePositionLimit;
         param->CrsfPositivePositionLimit = data->CrsfPositivePositionLimit;
+        param->CrsfCenterReference = (data->CrsfNegativePositionLimit
+                                      + data->CrsfPositivePositionLimit) >> 1;
     }
     param->TorqueEncoderCountsPerRev = data->TorqueEncoderCountsPerRev != 0U
                                            ? data->TorqueEncoderCountsPerRev : 16384U;
@@ -378,7 +371,7 @@ static void NvmParam_ApplySaveData(Param *param, const Param_SaveData *data)
     else
     {
         param->CurrentPeakLimit_mA = 1500U;
-        param->CurrentAbsoluteLimit_mA = 1750U;
+        param->CurrentAbsoluteLimit_mA = 1800U;
     }
     param->StallCurrentThreshold_mA =
         (data->StallCurrentThreshold_mA >= 50U
@@ -417,43 +410,33 @@ static void NvmParam_ApplySaveData(Param *param, const Param_SaveData *data)
     param->CrsfStatus = 0U;
 }
 
-static bool NvmParam_FindLatest(const NvmParamRecord **latest, uint32_t *next_slot)
+static bool NvmParam_FindLatest(const NvmParamRecordHeader **latest,
+                                uint32_t *next_slot)
 {
-    const NvmParamRecord *best = NULL;
+    const NvmParamRecordHeader *best = NULL;
     uint32_t first_free = NVM_PARAM_SLOT_COUNT;
 
     for (uint32_t i = 0; i < (uint32_t)NVM_PARAM_SLOT_COUNT; i++)
     {
-        uint32_t address = NVM_PARAM_FLASH_ADDR + (i * (uint32_t)NVM_PARAM_SLOT_SIZE);
-
+        uint32_t address = NVM_PARAM_FLASH_ADDR
+                         + i * (uint32_t)NVM_PARAM_SLOT_SIZE;
         if (NvmParam_IsSlotErased(address))
         {
             first_free = i;
             break;
         }
 
-        const NvmParamRecord *record = NvmParam_RecordAt(i);
-        if (NvmParam_IsRecordValid(record))
+        const NvmParamRecordHeader *record =
+            (const NvmParamRecordHeader *)address;
+        if (NvmParam_IsRecordValid(record)
+            && (best == NULL || record->sequence >= best->sequence))
         {
-            if ((best == NULL) || (record->sequence >= best->sequence))
-            {
-                best = record;
-            }
+            best = record;
         }
-
         first_free = i + 1U;
     }
-
-    if (latest != NULL)
-    {
-        *latest = best;
-    }
-
-    if (next_slot != NULL)
-    {
-        *next_slot = first_free;
-    }
-
+    if (latest != NULL) *latest = best;
+    if (next_slot != NULL) *next_slot = first_free;
     return best != NULL;
 }
 
@@ -558,30 +541,26 @@ static NvmParamStatus NvmParam_WriteSlot(uint32_t slot_index, const NvmParamReco
 
 NvmParamStatus NvmParam_Load(Param *param)
 {
-    const NvmParamRecord *latest = NULL;
+    const NvmParamRecordHeader *latest = NULL;
 
     if (param == NULL)
     {
         return NVM_PARAM_BAD_ARG;
     }
 
-    if (!NvmParam_FindLatest(&latest, NULL))
+    if (NvmParam_FindLatest(&latest, NULL))
     {
-        return NVM_PARAM_EMPTY;
+        const Param_SaveData *data = (const Param_SaveData *)(latest + 1);
+        NvmParam_ApplySaveData(param, data);
+        return NVM_PARAM_OK;
     }
 
-    if (!NvmParam_IsRecordValid(latest))
-    {
-        return NVM_PARAM_CRC_ERROR;
-    }
-
-    NvmParam_ApplySaveData(param, &latest->data);
-    return NVM_PARAM_OK;
+    return NVM_PARAM_EMPTY;
 }
 
 NvmParamStatus NvmParam_Save(const Param *param)
 {
-    const NvmParamRecord *latest = NULL;
+    const NvmParamRecordHeader *latest = NULL;
     NvmParamRecord record;
     Param_SaveData new_data;
     uint32_t next_slot = 0;
@@ -595,7 +574,15 @@ NvmParamStatus NvmParam_Save(const Param *param)
     NvmParam_FillSaveData(&new_data, param);
     (void)NvmParam_FindLatest(&latest, &next_slot);
 
-    if ((latest != NULL) && (memcmp(&latest->data, &new_data, sizeof(new_data)) == 0))
+    uint32_t unchanged = 0U;
+    if (latest != NULL)
+    {
+        while (unchanged < sizeof(new_data)
+               && ((const uint8_t *)(latest + 1))[unchanged]
+                  == ((const uint8_t *)&new_data)[unchanged])
+            ++unchanged;
+    }
+    if (unchanged == sizeof(new_data))
     {
         return NVM_PARAM_OK;
     }
@@ -605,7 +592,10 @@ NvmParamStatus NvmParam_Save(const Param *param)
         next_sequence = latest->sequence + 1U;
     }
 
-    if (next_slot >= (uint32_t)NVM_PARAM_SLOT_COUNT)
+    /* A record from an older layout can overlap the new slot boundaries. */
+    /* 旧版记录可能跨越新版槽边界；首次保存新版格式前必须整页擦除。 */
+    if ((latest == NULL && !NvmParam_IsSlotErased(NVM_PARAM_FLASH_ADDR))
+        || next_slot >= (uint32_t)NVM_PARAM_SLOT_COUNT)
     {
         NvmParamStatus erase_status = NvmParam_ErasePage();
         if (erase_status != NVM_PARAM_OK)
@@ -621,7 +611,8 @@ NvmParamStatus NvmParam_Save(const Param *param)
     record.data_size = sizeof(Param_SaveData);
     record.sequence = next_sequence;
     record.data = new_data;
-    record.crc32 = NvmParam_CalcCrc(&record);
+    record.crc32 = NvmParam_CalcRawCrc(
+        (const NvmParamRecordHeader *)&record, &record.data);
     record.commit_magic = NVM_PARAM_COMMIT_MAGIC;
 
     return NvmParam_WriteSlot(next_slot, &record);
@@ -639,11 +630,11 @@ bool NvmParam_HasValidData(void)
 
 uint32_t NvmParam_GetLatestSequence(void)
 {
-    const NvmParamRecord *latest = NULL;
-    if (!NvmParam_FindLatest(&latest, NULL))
-    {
-        return 0U;
-    }
+    const NvmParamRecordHeader *latest = NULL;
 
-    return latest->sequence;
+    if (NvmParam_FindLatest(&latest, NULL))
+    {
+        return latest->sequence;
+    }
+    return 0U;
 }

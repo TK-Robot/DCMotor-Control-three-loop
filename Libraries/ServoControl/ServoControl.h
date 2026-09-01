@@ -1,7 +1,7 @@
 /**
  * @file ServoControl.h
- * @brief Four-mode cascaded servo control scheduler.
- * @brief 四模式级联伺服控制调度器。
+ * @brief Servo control scheduler with four closed-loop modes and one diagnostic PWM mode.
+ * @brief 含四种闭环模式和一种诊断 PWM 模式的伺服控制调度器。
  */
 
 #ifndef TRIPLE_CASCADECONTROLDCMOTOR_SERVOCONTROL_H
@@ -43,6 +43,7 @@ typedef struct
     bool save_request;         ///< One-shot NVM save request. / 单次掉电保存请求。
     bool power_low_latched;    ///< Latched low-power protection state. / 低压保护锁存状态。
     bool current_speed_limit_active; ///< Current-mode same-direction speed limit. / 电流模式同向转矩限速状态。
+    uint16_t overload_hold_ms; ///< PWM cooldown, or UINT16_MAX while non-PWM waits for re-enable. / PWM 冷却剩余时间；UINT16_MAX 表示非 PWM 等待重新使能。
     int32_t position_speed_target; ///< Position-loop output before speed planning. / 位置环输出、速度规划前的目标。
     int32_t single_turn_target_absolute; ///< Target latched inside the current physical turn. / 锁存在当前物理圈内的单圈目标。
 } ServoControl;
@@ -96,13 +97,13 @@ bool ServoControl_ConsumeSaveRequest(ServoControl *servo);
 void ServoControl_ResetLoops(ServoControl *servo);
 
 /**
- * @brief Convert a validated active-low PWM pulse into a one-turn position command.
- * @brief 将已校验的低电平 PWM 脉宽转换为单圈位置命令。
- * @param low_width_us Captured low-level width in microseconds. / 捕获的低电平宽度，单位微秒。
+ * @brief Convert a validated active-high PWM pulse into a one-turn position command.
+ * @brief 将已校验的高电平 PWM 脉宽转换为单圈位置命令。
+ * @param pulse_width_us Captured high-level width in microseconds. / 捕获的高电平宽度，单位微秒。
  * @param signal_valid False disarms the generated command. / 为 false 时生成未使能命令。
  * @param command Output command owned by the caller. / 调用者持有的输出命令。
  */
-void ServoControl_BuildPwmPositionCommand(uint16_t low_width_us, bool signal_valid,
+void ServoControl_BuildPwmPositionCommand(uint16_t pulse_width_us, bool signal_valid,
                                           ServoCommand *command);
 
 #endif // TRIPLE_CASCADECONTROLDCMOTOR_SERVOCONTROL_H
