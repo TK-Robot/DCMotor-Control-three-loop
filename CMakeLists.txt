@@ -49,7 +49,6 @@ add_executable(${CMAKE_PROJECT_NAME}
         Libraries/TypeDefine.h
         Libraries/PID/PID.h
         Libraries/PID/PID.c
-        Libraries/PID/PID.h
         Libraries/Filter/Filter.c
         Libraries/Filter/Filter.h
         Libraries/PWMCapture/PWMCapture.c
@@ -117,6 +116,20 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
     # Add user defined libraries
+)
+
+# Keep the images commonly selected by flashing tools in lockstep with the ELF.
+# Without this post-build step CMake can relink a new ELF while leaving an old
+# .hex/.bin in the build directory, which makes a successful rebuild appear to
+# have no effect on the target.
+add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_OBJCOPY} -O ihex
+            $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
+            $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.hex
+    COMMAND ${CMAKE_OBJCOPY} -O binary
+            $<TARGET_FILE:${CMAKE_PROJECT_NAME}>
+            $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/${CMAKE_PROJECT_NAME}.bin
+    VERBATIM
 )
 
 # Release LTO is configured toolchain-wide so the application and STM32 driver

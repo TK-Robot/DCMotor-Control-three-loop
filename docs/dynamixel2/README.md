@@ -36,6 +36,7 @@
 - 输出已使能或存在使能中的活动/待执行命令时，Save NVM 返回 Access Error，必须先停机。
 - 周期 Sync Write 不逐节点 ACK；主站写入 Command Sequence 后，通过 Sync Read 读取 Applied Sequence、Last Command Result 和实时状态完成确认。
 - 私有指令 `0xA0 TK Sync Control` 支持最多 8 节点的原子广播控制，并由节点按记录顺序分时返回等结构 ACK。V1 只支持“下一本地控制更新点生效”，不承诺多节点控制周期相位同步。
+- 私有 `0xA1 TK Stream Sync` 由主站广播校时、周期和节点时隙；`0xA2 TK Stream Read` 将后续读取区间并入每节点下一帧主动上报。主动数据使用带 `0xA3` 参数标记的标准 Status Packet，普通 ACK 优先，错过时隙的旧波形不迟发。
 - 广播 Ping、Sync Read 和 `0xA0` 的回复等待使用 TIM1 比较中断与 UART TX DMA，不在 UART RX 回调中忙等。
 
 完整事务矩阵、错误码和周期命令格式见 [control-table.md](control-table.md#response--ack-policy)。

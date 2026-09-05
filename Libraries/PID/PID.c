@@ -40,16 +40,17 @@ void PID_MigrateLegacyCurrentTuning(Param *param)
     {
         param->Pid_Pos.Kd = 13U;
     }
-    if (param->Pid_PosVel.Kp == 20U &&
-        param->Pid_PosVel.Ki == 0U &&
-        param->Pid_PosVel.Kd == 0U)
+    bool legacy_velocity_gains = param->Pid_PosVel.Kp == 20U
+        && param->Pid_PosVel.Ki == 0U
+        && param->Pid_PosVel.Kd == 0U;
+    if (legacy_velocity_gains || param->Pid_PosVel.Kd != 0U
+        || param->Pid_PosVel.out_min != 0U)
     {
-        param->Pid_PosVel.Kp = 120U;
-        param->Pid_PosVel.Ki = 10U;
-        PID_Reset(&param->Pid_PosVel);
-    }
-    if (param->Pid_PosVel.Kd != 0U || param->Pid_PosVel.out_min != 0U)
-    {
+        if (legacy_velocity_gains)
+        {
+            param->Pid_PosVel.Kp = 120U;
+            param->Pid_PosVel.Ki = 10U;
+        }
         param->Pid_PosVel.Kd = 0U;
         param->Pid_PosVel.out_min = 0U;
         PID_Reset(&param->Pid_PosVel);
@@ -126,11 +127,13 @@ static int16_t PID_Vel_Calc(PID_Int* pid, int32_t target, int32_t feedback,
         pid->integral = 0;
     if (output_limit == 0U || output_limit > pid->out_max)
         output_limit = pid->out_max;
-    if (breakaway_speed_threshold_cps != 0U && target != 0 &&
+    if (target != 0 &&
         abs(feedback) <= (int32_t)breakaway_speed_threshold_cps &&
-        error != 0 && ((target ^ error) >= 0))
+        ((target ^ error) >= 0))
     {
-        integral_gain *= SPEED_BREAKAWAY_KI_MULTIPLIER;
+        integral_gain *= abs(target) <= SPEED_PULSE_DENSITY_MAX_CPS
+                         && output_limit > SPEED_LOW_CURRENT_PULSE_MA
+                       ? 16U : SPEED_BREAKAWAY_KI_MULTIPLIER;
     }
     P = pid->Kp * error / PID_SCALE;
     integral_limit = (int64_t)pid->integral_max * 50000LL;
@@ -183,17 +186,18 @@ int32_t PID_PositionLoop(Param *param, int32_t target_position)
 
 static int16_t PID_SpeedLoopLimited(Param *param, int32_t target_speed,
                                     uint16_t update_period_ms,
-                                    uint16_t current_limit_mA)
+                                    uint16_t current_limit_mA,
+                                    bool reversal_guard_enabled)
 {
     bool pulse_density_speed = target_speed != 0
         && abs(target_speed) <= SPEED_PULSE_DENSITY_MAX_CPS;
-    int32_t previous_planned_speed = param->SpeedRef;
     int32_t planner_target = target_speed;
-    bool physical_reversal =
-        target_speed != 0 && param->EncoderSpeed != 0
-        && ((target_speed ^ param->EncoderSpeed) < 0)
-        && abs(param->EncoderSpeed)
-           > (int32_t)param->StallSpeedThreshold_cps;
+    const int32_t reversal_threshold =
+        (int32_t)param->StallSpeedThreshold_cps;
+    bool physical_reversal = reversal_guard_enabled
+        && ((target_speed < 0 && param->EncoderSpeed > reversal_threshold)
+            || (target_speed > 0
+                && param->EncoderSpeed < -reversal_threshold));
 
     /* Do not let the reference accelerate through zero while the load-side
      * encoder still reports motion in the old direction.  With gearbox
@@ -202,12 +206,10 @@ static int16_t PID_SpeedLoopLimited(Param *param, int32_t target_speed,
     if (physical_reversal) planner_target = 0;
     int32_t planned_speed = SpeedPlan_Update(param, planner_target,
                                              update_period_ms);
-    if (planned_speed == 0
-        || (previous_planned_speed ^ planned_speed) < 0)
+    if (planned_speed == 0 || physical_reversal)
     {
         PID_Reset(&param->Pid_PosVel);
     }
-    if (physical_reversal) param->Pid_PosVel.integral = 0;
     int16_t current = PID_Vel_Calc(&param->Pid_PosVel, planned_speed,
                                    param->EncoderSpeed, update_period_ms,
                                    current_limit_mA,
@@ -265,17 +267,19 @@ int16_t PID_SpeedLoop(Param *param, int32_t target_speed,
                       uint16_t update_period_ms)
 {
     return PID_SpeedLoopLimited(param, target_speed, update_period_ms,
-                                param->Pid_PosVel.out_max);
+                                param->Pid_PosVel.out_max, true);
 }
 
 int32_t PID_SpeedTorqueLoop(Param *param, int32_t target_speed,
                             uint16_t update_period_ms,
                             uint16_t current_limit_mA,
-                            int32_t *reference_acceleration_cps2)
+                            bool reversal_guard_enabled,
+    int32_t *reference_acceleration_cps2)
 {
     int32_t previous_speed_reference = param->SpeedRef;
     int16_t current_equivalent_mA = PID_SpeedLoopLimited(
-        param, target_speed, update_period_ms, current_limit_mA);
+        param, target_speed, update_period_ms, current_limit_mA,
+        reversal_guard_enabled);
     int64_t acceleration = 0;
 
     if (update_period_ms != 0U)

@@ -59,6 +59,13 @@ static void test_status_and_sync_instructions(void)
                                               1U, 1U, 2U, 0U, 0U, 0U, 0U,
                                               0U, 0U, 0U, 0U, 0U, 0U, 0U,
                                               0U, 0U};
+    const uint8_t stream_sync_parameters[] = {
+        DXL2_TK_STREAM_VERSION, DXL2_TK_STREAM_SYNC_ENABLE,
+        0x34U, 0x12U, 0xE8U, 0x03U, 0U, 0U,
+        10U, 0U, 0xE8U, 0x03U, 2U, 1U, 2U};
+    const uint8_t stream_read_parameters[] = {
+        DXL2_TK_STREAM_VERSION, 0x34U, 0x12U,
+        DXL2_TK_STREAM_READ_REPLACE, 44U, 0U, 16U};
     uint8_t encoded[96];
     uint16_t length;
     Dxl2DecodeResult decoded;
@@ -94,6 +101,37 @@ static void test_status_and_sync_instructions(void)
               && decoded.packet.instruction == DXL2_INST_SYNC_WRITE
               && decoded.packet.parameter_length == sizeof(sync_write_parameters),
           "Sync Write instruction round trip");
+
+    length = Dxl2_EncodeInstruction(encoded, sizeof(encoded), 3U,
+                                    DXL2_INST_TK_TIMED_READ,
+                                    sync_read_parameters,
+                                    DXL2_TK_TIMED_READ_REQUEST_SIZE);
+    decoded = Dxl2_DecodePacket(encoded, length);
+    check(decoded.status == DXL2_DECODE_OK
+              && decoded.packet.instruction == DXL2_INST_TK_TIMED_READ
+              && decoded.packet.parameter_length
+                     == DXL2_TK_TIMED_READ_REQUEST_SIZE,
+          "TK Timed Read instruction round trip");
+
+    length = Dxl2_EncodeInstruction(encoded, sizeof(encoded), DXL2_BROADCAST_ID,
+                                    DXL2_INST_TK_STREAM_SYNC,
+                                    stream_sync_parameters,
+                                    sizeof(stream_sync_parameters));
+    decoded = Dxl2_DecodePacket(encoded, length);
+    check(decoded.status == DXL2_DECODE_OK
+              && decoded.packet.instruction == DXL2_INST_TK_STREAM_SYNC
+              && decoded.packet.parameter_length == sizeof(stream_sync_parameters),
+          "TK Stream Sync instruction round trip");
+
+    length = Dxl2_EncodeInstruction(encoded, sizeof(encoded), 2U,
+                                    DXL2_INST_TK_STREAM_READ,
+                                    stream_read_parameters,
+                                    sizeof(stream_read_parameters));
+    decoded = Dxl2_DecodePacket(encoded, length);
+    check(decoded.status == DXL2_DECODE_OK
+              && decoded.packet.instruction == DXL2_INST_TK_STREAM_READ
+              && decoded.packet.parameter_length == sizeof(stream_read_parameters),
+          "TK Stream Read instruction round trip");
 }
 
 static void test_control_table_contract(void)
@@ -211,7 +249,8 @@ static void test_response_policy(void)
               && Dxl2_ShouldReturnStatus(1U, DXL2_INST_READ)
               && Dxl2_ShouldReturnStatus(1U, DXL2_INST_WRITE)
               && Dxl2_ShouldReturnStatus(1U, DXL2_INST_REG_WRITE)
-              && Dxl2_ShouldReturnStatus(1U, DXL2_INST_ACTION),
+              && Dxl2_ShouldReturnStatus(1U, DXL2_INST_ACTION)
+              && Dxl2_ShouldReturnStatus(1U, DXL2_INST_TK_TIMED_READ),
           "supported unicast instructions return Status");
     check(Dxl2_ShouldReturnStatus(DXL2_BROADCAST_ID, DXL2_INST_PING)
               && Dxl2_ShouldReturnStatus(DXL2_BROADCAST_ID, DXL2_INST_SYNC_READ),
@@ -221,10 +260,15 @@ static void test_response_policy(void)
               && !Dxl2_ShouldReturnStatus(DXL2_BROADCAST_ID, DXL2_INST_ACTION)
               && !Dxl2_ShouldReturnStatus(DXL2_BROADCAST_ID, DXL2_INST_SYNC_WRITE)
               && !Dxl2_ShouldReturnStatus(DXL2_BROADCAST_ID,
-                                           DXL2_INST_TK_SYNC_CONTROL),
+                                           DXL2_INST_TK_SYNC_CONTROL)
+              && !Dxl2_ShouldReturnStatus(DXL2_BROADCAST_ID,
+                                           DXL2_INST_TK_TIMED_READ),
           "broadcast write operations never return Status");
     check(!Dxl2_ShouldReturnStatus(1U, DXL2_INST_STATUS),
           "a received Status Packet is never acknowledged");
+    check(!Dxl2_ShouldReturnStatus(1U, DXL2_INST_TK_STREAM_SYNC)
+              && !Dxl2_ShouldReturnStatus(1U, DXL2_INST_TK_STREAM_READ),
+          "one-way stream packets never return Status");
 }
 
 static void test_tk_sync_control_parser(void)

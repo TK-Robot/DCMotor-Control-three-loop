@@ -21,25 +21,17 @@ extern "C" {
 
 #define DXL2_RX_STREAM_SIZE      256U   /**< Reassembly buffer across DMA idle events. / 跨 DMA 空闲事件的重组缓冲区。 */
 #define DXL2_MODEL_NUMBER        0x0001U /**< TK Servo model number returned by Ping. / Ping 返回的 TK Servo 型号。 */
-#define DXL2_FIRMWARE_VERSION    0x19U   /**< One-byte firmware revision. / 单字节固件版本。 */
+#define DXL2_FIRMWARE_VERSION    0x1EU   /**< One-byte firmware revision. / 单字节固件版本。 */
+
+typedef struct
+{
+    uint16_t address;
+    uint8_t length;
+} Dynamixel2StreamRange;
 
 /** Observe copied RX bytes without taking ownership of the UART transport. / 观察已复制的接收字节，但不取得 UART 传输所有权。 */
 typedef void (*Dynamixel2RxObserver)(void *user, const uint8_t *data,
                                      uint16_t length);
-
-typedef struct
-{
-    int32_t actual_velocity;
-    int32_t actual_position;
-    int32_t multi_turn_position;
-    uint32_t current_tick;
-    uint16_t status_word;
-    uint16_t fault_code;
-    int16_t actual_current;
-    int16_t drive_output;
-    uint16_t supply_voltage;
-    int8_t temperature;
-} Dynamixel2StatusSnapshot;
 
 /**
  * @brief Runtime owner for one DYNAMIXEL slave endpoint. / 单个 DYNAMIXEL 从站端点的运行期所有者。
@@ -76,12 +68,12 @@ typedef struct
     bool baud_change_in_progress;    /**< Responses wait while main reconfigures UART. / 主循环重配 UART 期间暂停响应发送。 */
     bool watchdog_latched;           /**< Prevent repeated timeout accounting. / 防止重复记录同一次超时。 */
     bool pending_valid;              /**< Pending command is ready for atomic apply. / 待处理命令可原子生效。 */
-    bool tx_busy;                    /**< UART DMA currently owns Param.TxBuf. / UART DMA 当前占用 Param.TxBuf。 */
+    volatile bool tx_busy;           /**< UART DMA currently owns Param.TxBuf. / UART DMA 当前占用 Param.TxBuf。 */
     bool rx_active;                  /**< Receive-to-idle DMA has been armed. / Receive-to-idle DMA 已启动。 */
     bool save_request;               /**< Deferred NVM save request for main loop. / 交给主循环处理的延迟 NVM 保存请求。 */
     bool save_status_pending;        /**< Unicast Save NVM awaits durable completion status. / 单播 NVM 保存正等待持久化完成状态。 */
-    bool pending_tx_valid;           /**< One queued status packet is present. / 存在一个排队状态包。 */
-    bool pending_tx_delayed;         /**< TIM1 owns the queued packet until its reply deadline. / TIM1 在回复时限前持有排队包。 */
+    volatile bool pending_tx_valid;  /**< One queued status packet is present. / 存在一个排队状态包。 */
+    volatile bool pending_tx_delayed; /**< TIM1 owns the queued packet until its reply deadline. / TIM1 在回复时限前持有排队包。 */
     uint16_t pending_tx_length;      /**< Queued encoded status length. / 排队状态包的编码长度。 */
     uint8_t pending_tx[DXL2_MAX_PACKET_SIZE]; /**< One-deep TX queue storage. / 深度为一的发送队列存储。 */
     uint16_t rx_stream_length;       /**< Valid bytes in rx_stream. / rx_stream 中的有效字节数。 */
@@ -99,8 +91,24 @@ typedef struct
     uint32_t rx_crc_error_count;     /**< CRC rejection count. / CRC 拒收计数。 */
     uint32_t rx_bad_packet_count;    /**< Non-CRC packet rejection count. / 非 CRC 坏包计数。 */
     uint32_t tx_drop_count;          /**< Status responses dropped by bounded TX queue. / 有界发送队列丢弃的状态响应数。 */
-    Dynamixel2StatusSnapshot status_snapshot[2]; /**< Control-loop-published immutable snapshots. / 控制循环发布的不可变快照。 */
-    uint8_t status_snapshot_index;   /**< Currently published snapshot index. / 当前已发布快照索引。 */
+    bool stream_active;              /**< Synchronized proactive reporting is active. / 同步主动上报已启用。 */
+    volatile bool stream_frame_ready; /**< Latest sampled frame awaits its assigned TX slot. / 最新采样帧等待所属发送时隙。 */
+    bool stream_frame_overwritten;   /**< At least one older unsent sample was replaced. / 至少一帧未发样本被新样本覆盖。 */
+    uint8_t stream_reply_index;      /**< Index in the master's synchronized node list. / 主站同步节点列表中的序号。 */
+    uint8_t stream_node_count;       /**< Nodes sharing the reporting schedule. / 共用主动上报时序的节点数。 */
+    uint8_t stream_range_count;      /**< Number of merged read ranges. / 已合并读取区间数量。 */
+    uint16_t stream_session;         /**< Master-owned stream session identifier. / 主站分配的上报会话号。 */
+    uint16_t stream_sequence;        /**< Sequence of the latest sampled frame. / 最近采样帧序号。 */
+    uint16_t stream_period_ms;       /**< Common sample/report period. / 公共采样与上报周期。 */
+    uint16_t stream_slot_us;         /**< Collision-free per-node transmit slot. / 防碰撞的单节点发送时隙。 */
+    uint32_t stream_clock_offset;    /**< Master tick minus local tick. / 主站时刻减去本地时刻。 */
+    uint32_t stream_next_sample_tick; /**< Next local fixed-period sampling deadline. / 下一本地定周期采样时刻。 */
+    uint32_t stream_lease_deadline;  /**< Reporting stops when this local deadline expires. / 到达本地租约时限后停止上报。 */
+    uint32_t stream_tx_due_tick;     /**< Beginning of this node's current TX slot. / 当前节点本轮发送时隙起点。 */
+    uint32_t stream_tx_expire_tick;  /**< End of this node's current TX slot. / 当前节点本轮发送时隙终点。 */
+    Dynamixel2StreamRange stream_ranges[DXL2_TK_STREAM_MAX_RANGES];
+    uint16_t stream_frame_length;    /**< Unstuffed A3 parameter length. / 未填充的 A3 参数长度。 */
+    uint8_t stream_frame[DXL2_MAX_PARAMETERS]; /**< Latest complete A3 parameters. / 最新完整 A3 参数。 */
 } Dynamixel2Context;
 
 /**

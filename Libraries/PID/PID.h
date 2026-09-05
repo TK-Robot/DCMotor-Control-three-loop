@@ -7,6 +7,7 @@
 #ifndef TRIPLE_CASCADECONTROLDCMOTOR_PID_H
 #define TRIPLE_CASCADECONTROLDCMOTOR_PID_H
 
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "TypeDefine.h"
@@ -68,12 +69,15 @@ int16_t PID_SpeedLoop(Param *param, int32_t target_speed,
  * Existing velocity PID gains keep their current-equivalent mA scaling for
  * NVM/control-table compatibility. The returned value is converted through
  * the temperature-corrected torque constant and is therefore in uN*m.
+ * Set reversal_guard_enabled for direct velocity commands; position feedback
+ * must leave it disabled so external disturbance correction is not blocked.
  * 为兼容 NVM 和控制表，现有速度 PID 增益继续使用 mA 等效量缩放；返回值
  * 通过温度修正后的力矩常数换算，单位为 uN*m。
  */
 int32_t PID_SpeedTorqueLoop(Param *param, int32_t target_speed,
                             uint16_t update_period_ms,
                             uint16_t current_limit_mA,
+                            bool reversal_guard_enabled,
                             int32_t *reference_acceleration_cps2);
 
 /**

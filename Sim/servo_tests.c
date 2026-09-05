@@ -142,7 +142,7 @@ static int test_breakaway_uses_speed_pi_integrator(void)
     (void)PID_SpeedLoop(&stalled, 1500, 1U);
     (void)PID_SpeedLoop(&moving, 1500, 1U);
     CHECK(stalled.Pid_PosVel.integral
-          > moving.Pid_PosVel.integral * 4L);
+          > moving.Pid_PosVel.integral * 16L);
     CHECK(stalled.Pid_PosVel.Ki == moving.Pid_PosVel.Ki);
     return 0;
 }
@@ -223,7 +223,7 @@ static int test_low_speed_uses_same_direction_pulse_density(void)
     PID_Reset(&param.Pid_PosVel);
     param.SpeedRef = 0;
     param.target_speed = 0;
-    (void)PID_SpeedTorqueLoop(&param, 100, 1U, 80U, NULL);
+    (void)PID_SpeedTorqueLoop(&param, 100, 1U, 80U, true, NULL);
     CHECK(param.ExpectMA == 80);
     return 0;
 }
@@ -827,6 +827,47 @@ static int test_physical_reversal_waits_for_load_speed_zero(void)
     return 0;
 }
 
+static int test_position_hold_disturbance_reacts_without_reversal_wait(void)
+{
+    Param param = {0};
+    ServoControl servo;
+    ServoCommand command = {0};
+
+    default_param(&param);
+    param.EncoderValue = 1000U;
+    param.EncoderMultiTurnValue = 1000;
+    command.mode = SERVO_MODE_POSITION;
+    command.enable = true;
+    command.position_multi_turn = false;
+    command.target_position = 1000;
+    ServoControl_Init(&servo, &param);
+    ServoControl_SetCommand(&servo, &command);
+
+    for (uint8_t tick = 0; tick < SERVO_POSITION_PERIOD_MS; ++tick)
+    {
+        ServoControl_Begin1ms(&servo);
+        ServoControl_Run1ms(&servo);
+    }
+    CHECK(param.EncoderSpeedExpect == 0);
+
+    /* The target did not change: positive shaft motion is an external
+     * disturbance, so the position loop must build a negative reference on
+     * its first 5 ms update instead of waiting for speed to fall below the
+     * 300 count/s reversal threshold. */
+    param.EncoderValue = 9192U;
+    param.EncoderMultiTurnValue = 9192;
+    param.EncoderSpeed = 4000;
+    for (uint8_t tick = 0; tick < SERVO_POSITION_PERIOD_MS; ++tick)
+    {
+        ServoControl_Begin1ms(&servo);
+        ServoControl_Run1ms(&servo);
+    }
+    CHECK(servo.position_speed_target < 0);
+    CHECK(param.EncoderSpeedExpect < 0);
+    CHECK(param.ExpectMA < 0);
+    return 0;
+}
+
 static int test_velocity_overspeed_brakes_and_reversal_remains_active(void)
 {
     Param param = {0};
@@ -1405,6 +1446,22 @@ static int test_single_and_multi_turn_position_targets(void)
     }
     CHECK(servo.position_speed_target > 0);
 
+    /* Keep all phase targets on the turn latched when single-turn control
+     * started.  If the shaft briefly crosses zero near 16383, switching the
+     * command to zero must request the full reverse stroke instead of
+     * relatching zero into the adjacent revolution and falling in deadband. */
+    param.EncoderMultiTurnValue = 16390;
+    param.EncoderValue = 6;
+    command.target_position = 0;
+    ServoControl_SetCommand(&servo, &command);
+    for (uint8_t tick = 0U; tick < SERVO_POSITION_PERIOD_MS; ++tick)
+    {
+        ServoControl_Begin1ms(&servo);
+        ServoControl_Run1ms(&servo);
+    }
+    CHECK(servo.single_turn_target_absolute == 0);
+    CHECK(servo.position_speed_target < 0);
+
     command.position_multi_turn = true;
     command.target_position = 33768;
     ServoControl_SetCommand(&servo, &command);
@@ -1464,6 +1521,7 @@ int main(void)
     CHECK(test_speed_integral_adapts_breakaway_load() == 0);
     CHECK(test_output_phase_map_does_not_modify_control() == 0);
     CHECK(test_physical_reversal_waits_for_load_speed_zero() == 0);
+    CHECK(test_position_hold_disturbance_reacts_without_reversal_wait() == 0);
     CHECK(test_velocity_overspeed_brakes_and_reversal_remains_active() == 0);
     CHECK(test_mixed_decay_is_delegated_to_pwm_loop() == 0);
     CHECK(test_current_mode_speed_limit() == 0);

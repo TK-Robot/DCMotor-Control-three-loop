@@ -24,6 +24,9 @@ extern "C" {
 #define DXL2_INST_SYNC_READ     0x82U  /**< Ordered multi-node read. / 按 ID 列表排序的多节点读取。 */
 #define DXL2_INST_SYNC_WRITE    0x83U  /**< Broadcast multi-node write. / 广播多节点写入。 */
 #define DXL2_INST_TK_SYNC_CONTROL 0xA0U /**< TK atomic broadcast control. / TK 原子广播控制。 */
+#define DXL2_INST_TK_TIMED_READ DXL2_INST_TK_SYNC_CONTROL /**< Unicast A0 returns tick + data. / 单播 A0 返回时刻 + 数据。 */
+#define DXL2_INST_TK_STREAM_SYNC 0xA1U /**< Broadcast clock sync and stream control. / 广播校时与主动上报控制。 */
+#define DXL2_INST_TK_STREAM_READ 0xA2U /**< Merge one read range into a stream frame. / 将一个读取区间并入上报帧。 */
 #define DXL2_MAX_PARAMETERS     160U   /**< Supports one eight-node TK control request. / 支持一个八节点 TK 控制请求。 */
 #define DXL2_MAX_PACKET_SIZE    256U   /**< Covers worst-case stuffing at maximum parameters. / 覆盖最大参数包的最坏填充长度。 */
 #define DXL2_FIXED_STATUS_RETURN_LEVEL 2U /**< All supported unicast instructions return Status. / 所有受支持单播指令均返回状态包。 */
@@ -33,6 +36,18 @@ extern "C" {
 #define DXL2_TK_SYNC_MAX_NODES         8U    /**< V1 bounded node count. / V1 有界节点数。 */
 #define DXL2_TK_ACK_SUPPORTED_MASK     0x03FFU /**< Supported optional ACK fields. / 支持的 ACK 可选字段。 */
 #define DXL2_TK_EXECUTE_NEXT_UPDATE    0U    /**< Apply at the next local update. / 在下一本地控制更新点生效。 */
+#define DXL2_TK_TIMED_READ_REQUEST_SIZE 3U   /**< address u16 + 7-bit data length. / 地址 u16 + 7 位数据长度。 */
+#define DXL2_TK_TIMED_READ_TICK_SIZE   4U    /**< uint32 little-endian millisecond tick. / uint32 小端毫秒时刻。 */
+#define DXL2_TK_STREAM_VERSION          1U
+#define DXL2_TK_STREAM_SYNC_HEADER_SIZE 13U  /**< version, flags, session, tick, period, slot, count. */
+#define DXL2_TK_STREAM_MAX_NODES        8U
+#define DXL2_TK_STREAM_MAX_RANGES       8U
+#define DXL2_TK_STREAM_FRAME_HEADER_SIZE 12U /**< marker, version, session, sequence, tick, flags, count. */
+#define DXL2_TK_STREAM_SYNC_ENABLE      0x01U
+#define DXL2_TK_STREAM_SYNC_CLEAR       0x02U
+#define DXL2_TK_STREAM_READ_REPLACE     0x01U
+#define DXL2_TK_STREAM_FLAG_OVERWRITE   0x01U
+#define DXL2_TK_STREAM_STATUS_MARKER     0xA3U
 
 /**
  * @brief Standard DYNAMIXEL Protocol 2.0 Status Packet error numbers.
@@ -118,8 +133,9 @@ Dxl2TkSyncParseStatus Dxl2_ParseTkSyncControl(const Dxl2Packet *packet,
  * @brief Return whether this firmware must emit a Status Packet for an instruction.
  * @brief 判断本固件是否必须为该指令发送状态包。
  *
- * Supported unicast instructions always reply. Broadcast replies are limited to
- * Ping and Sync Read; unsupported Bulk Read is intentionally not included.
+ * Supported unicast request/response instructions reply. One-way stream
+ * configuration instructions do not reply. Broadcast replies are limited
+ * to Ping and Sync Read; unsupported Bulk Read is intentionally not included.
  * 受支持单播指令始终回复；广播仅 Ping 和 Sync Read 回复，未实现的 Bulk Read 不计入。
  */
 bool Dxl2_ShouldReturnStatus(uint8_t packet_id, uint8_t instruction);

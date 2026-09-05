@@ -248,14 +248,10 @@ static void ServoControl_RunPositionSpeedCascade(ServoControl *servo)
         if (!servo->command.position_multi_turn)
         {
             const int32_t phase_target = target & 0x3FFFL;
-            if ((servo->single_turn_target_absolute & 0x3FFFL) != phase_target)
-            {
-                servo->single_turn_target_absolute =
-                    param->EncoderMultiTurnValue - (int32_t)param->EncoderValue
-                    + phase_target;
-            }
-            target = servo->single_turn_target_absolute;
+            target = (servo->single_turn_target_absolute & ~0x3FFFL)
+                   + phase_target;
         }
+        servo->single_turn_target_absolute = target;
         speed_target = PID_PositionLoop(param, target);
         if (servo->command.speed_limit_cps != 0U)
         {
@@ -274,6 +270,9 @@ static void ServoControl_RunPositionSpeedCascade(ServoControl *servo)
             param, speed_target,
             (uint16_t)(SERVO_SPEED_PERIOD_MS * param->CycleTimeMs),
             ServoControl_EffectiveCurrentLimit(servo),
+            /* Position error may oppose disturbance velocity; the reference
+             * acceleration planner already bounds the corrective reversal. */
+            false,
             &reference_acceleration_cps2);
         ServoControl_ResolveShaftTorque(servo,
                                         shaft_target_torque_uNm,
@@ -506,6 +505,7 @@ void ServoControl_Run1ms(ServoControl *servo)
                 param, speed_target,
                 (uint16_t)(SERVO_SPEED_PERIOD_MS * param->CycleTimeMs),
                 ServoControl_EffectiveCurrentLimit(servo),
+                true,
                 &reference_acceleration_cps2);
             ServoControl_ResolveShaftTorque(servo,
                                             shaft_target_torque_uNm,

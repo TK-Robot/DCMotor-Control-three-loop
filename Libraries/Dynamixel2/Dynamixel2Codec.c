@@ -95,7 +95,10 @@ bool Dxl2_ShouldReturnStatus(uint8_t packet_id, uint8_t instruction)
     {
         return instruction == DXL2_INST_PING || instruction == DXL2_INST_SYNC_READ;
     }
-    return packet_id <= 0xFCU && instruction != DXL2_INST_STATUS;
+    return packet_id <= 0xFCU
+           && instruction != DXL2_INST_STATUS
+           && instruction != DXL2_INST_TK_STREAM_SYNC
+           && instruction != DXL2_INST_TK_STREAM_READ;
 }
 
 uint16_t Dxl2_UpdateCrc(uint16_t accumulator, const uint8_t *data, uint16_t length)

@@ -321,7 +321,9 @@ Status Word ... Temperature（地址 40..62）
 
 `0xA0` 保留 DYNAMIXEL Protocol 2.0 包头、Length、Byte Stuffing 和 CRC，仅定义私有 Instruction 与 Parameters。请求必须使用广播 ID `0xFE`：
 
-使用单播 ID 发送 `0xA0` 时，从站返回 `Instruction Error`，不会提交控制命令。
+使用单播 ID 发送 `0xA0` 时是带设备毫秒时标的 Timed Read：参数为
+`Address U16 + Length U8`，Status Parameters 为 `Sample Tick U32 + Data`；
+它不会提交控制命令。
 
 ```text
 Sequence       U16
@@ -395,7 +397,8 @@ ACK Mask 决定随后附加的字段；无论事务成功或失败，同一 A0 �
 | 8 | Temperature | 1 |
 | 9 | Current Tick | 4 |
 
-可选字段严格按 bit0 到 bit9 顺序编码。状态来自控制循环发布的双缓冲快照；协议收到 A0 后立即复制当前已发布快照，后续编码和 DMA 不再读取变化中的控制变量。
+可选字段严格按 bit0 到 bit9 顺序编码。A0 在 UART/DMA 中断上下文构造 ACK，
+此时主循环已被抢占，因此直接读取的运行状态在该次 ACK 构造期间保持稳定。
 
 ### 非阻塞回复时隙
 
@@ -409,6 +412,72 @@ reply_deadline = packet_end + 50 us + reply_index × slot_width
 ```
 
 `wire_bytes` 按最坏 Byte Stuffing 计算，因此错误 ACK 与正常 ACK 即使实际填充字节不同也不会侵入下一时隙。等待由 TIM1 Compare 中断完成，到期后启动 UART TX DMA；UART RX 回调不执行微秒忙等。当前 16 位回复计时器要求单节点 deadline 不超过 60000 us，超出时记录 TX Drop 并保持静默。
+
+## 同步主动上报（私有指令 `0xA1/0xA2`）
+
+主动上报沿用 DYNAMIXEL 2.0 的包头、Byte Stuffing 和 CRC。主站先广播
+`TK Stream Sync (0xA1)`，随后用单播 `TK Stream Read (0xA2)` 把各节点需要
+读取的控制表区间合入同一上报帧。普通 Read/Write 和控制 ACK 不改变语义。
+
+### `0xA1` 校时与启停
+
+```text
+Version       U8   固定 1
+Flags         U8   bit0 Enable，bit1 Clear Ranges
+Session       U16
+Master Tick   U32  主站毫秒时基
+Period        U16  公共采样周期，ms
+Slot Width    U16  每节点回复时隙，us
+Node Count    U8   1..8
+Node IDs      U8 × Node Count
+```
+
+节点列表顺序就是上报时隙顺序。所有目标节点以接收广播帧的本地时刻校正主站
+时基，并在下一个主站周期边界采样。周期必须不少于
+`Node Count × ceil(Slot Width / 1000)` ms。主站每 1 s 重发同一 Session 的同步帧；
+3 s 未续租时从站自动停止上报。同一 Session 且配置不变的同步帧仅延长租约，
+不得重新计算时钟偏移、采样相位或取消待发帧；只有新 Session、Clear 或配置变化
+才重新校时。这样 USB/UART 排队延迟不会被误当成从站时钟偏差。Enable 清零的
+固定头广播立即停止上报。
+
+### `0xA2` 合并读取区间
+
+```text
+Version       U8   固定 1
+Session       U16
+Flags         U8   bit0 Replace，清除该节点原区间后再加入
+Address       U16
+Length        U8   1..127
+```
+
+`0xA2` 是无 ACK 配置帧。每节点最多 8 个区间，包含帧头、区间描述和数据后的
+总 Parameters 不得超过 160 字节。主站在第一次上报前可连续发送多个 `0xA2`；
+从站在采样边界构造一次控制表快照，把全部已配置区间合并到一帧中。
+
+### 主动数据 Status Packet
+
+主动数据使用标准 `Instruction=0x55` Status Packet，Parameters 以 `0xA3` 标记，
+主站先校验 Marker、Version、Session 和完整区间结构，再与普通在途事务区分：
+
+```text
+Marker        U8   固定 0xA3
+Version       U8   固定 1
+Session       U16
+Sequence      U16  每节点逐帧递增
+Sample Tick   U32  同步后的主站毫秒时基
+Flags         U8   bit0 表示未发送旧样本曾被最新样本覆盖
+Range Count   U8
+
+repeat Range Count:
+    Address    U16
+    Length     U8
+    Data       U8 × Length
+```
+
+多节点上报时，主动帧在所属时隙内优先；若总线持续忙到错过当前时隙，旧波形
+不允许迟发，以免碰撞后续节点。单节点没有节点间碰撞风险，因此已采样帧不会仅因
+时隙到期被丢弃，而是在 TX 空闲后发送；若一直阻塞到下一采样点，才由最新完整样本
+覆盖并在下一帧设置覆盖标志。
 
 ## PID 子结构
 
